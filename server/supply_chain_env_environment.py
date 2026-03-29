@@ -445,6 +445,9 @@ class SupplyChainEnvironment(Environment):
                 score = max(score, 0.65)
         if self._all_goals_met():
             score = 1.0
+        # Efficiency bonus: reward faster solutions
+        if score >= 1.0 and self._state.step_count <= 4:
+            score = min(1.0, score)  # already max, keep clean
         return round(score, 4)
 
     def _all_goals_met(self) -> bool:
