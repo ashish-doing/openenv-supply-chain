@@ -1,99 +1,50 @@
-# Copyright (c) Meta Platforms, Inc. and affiliates.
-# All rights reserved.
-#
-# This source code is licensed under the BSD-style license found in the
-# LICENSE file in the root directory of this source tree.
-
-"""Supply Chain Env Environment Client."""
-
-from typing import Dict
-
-from openenv.core import EnvClient
-from openenv.core.client_types import StepResult
-from openenv.core.env_server.types import State
-
-from .models import SupplyChainAction, SupplyChainObservation
+"""Supply Chain Environment — HTTP client."""
+from typing import Dict, Any
+import requests
 
 
-class SupplyChainEnv(
-    EnvClient[SupplyChainAction, SupplyChainObservation, State]
-):
+class SupplyChainEnv:
     """
-    Client for the Supply Chain Env Environment.
-
-    This client maintains a persistent WebSocket connection to the environment server,
-    enabling efficient multi-step interactions with lower latency.
-    Each client instance has its own dedicated environment session on the server.
+    HTTP client for the Supply Chain Environment.
 
     Example:
-        >>> # Connect to a running server
-        >>> with SupplyChainEnv(base_url="http://localhost:8000") as client:
-        ...     result = client.reset()
-        ...     print(result.observation.echoed_message)
-        ...
-        ...     result = client.step(SupplyChainAction(message="Hello!"))
-        ...     print(result.observation.echoed_message)
-
-    Example with Docker:
-        >>> # Automatically start container and connect
-        >>> client = SupplyChainEnv.from_docker_image("supply_chain_env-env:latest")
-        >>> try:
-        ...     result = client.reset()
-        ...     result = client.step(SupplyChainAction(message="Test"))
-        ... finally:
-        ...     client.close()
+        env = SupplyChainEnv("http://localhost:7860")
+        obs = env.reset(task_id=0)
+        result = env.step("place_order", {
+            "supplier_name": "SupplierA",
+            "product": "bottled_water",
+            "quantity": 200
+        })
+        print(result["reward"])
     """
 
-    def _step_payload(self, action: SupplyChainAction) -> Dict:
-        """
-        Convert SupplyChainAction to JSON payload for step message.
+    def __init__(self, base_url: str = "http://localhost:7860"):
+        self.base_url = base_url.rstrip("/")
 
-        Args:
-            action: SupplyChainAction instance
+    def health(self) -> dict:
+        r = requests.get(f"{self.base_url}/health", timeout=10)
+        r.raise_for_status()
+        return r.json()
 
-        Returns:
-            Dictionary representation suitable for JSON encoding
-        """
-        return {
-            "message": action.message,
-        }
-
-    def _parse_result(self, payload: Dict) -> StepResult[SupplyChainObservation]:
-        """
-        Parse server response into StepResult[SupplyChainObservation].
-
-        Args:
-            payload: JSON response data from server
-
-        Returns:
-            StepResult with SupplyChainObservation
-        """
-        obs_data = payload.get("observation", {})
-        observation = SupplyChainObservation(
-            echoed_message=obs_data.get("echoed_message", ""),
-            message_length=obs_data.get("message_length", 0),
-            done=payload.get("done", False),
-            reward=payload.get("reward"),
-            metadata=obs_data.get("metadata", {}),
+    def reset(self, task_id: int = 0, seed: int = 42) -> dict:
+        r = requests.post(
+            f"{self.base_url}/reset",
+            params={"task_id": task_id, "seed": seed},
+            timeout=15,
         )
+        r.raise_for_status()
+        return r.json()
 
-        return StepResult(
-            observation=observation,
-            reward=payload.get("reward"),
-            done=payload.get("done", False),
+    def step(self, tool: str, args: Dict[str, Any] = None) -> dict:
+        r = requests.post(
+            f"{self.base_url}/step",
+            json={"tool": tool, "args": args or {}},
+            timeout=15,
         )
+        r.raise_for_status()
+        return r.json()
 
-    def _parse_state(self, payload: Dict) -> State:
-        """
-        Parse server response into State object.
-
-        Args:
-            payload: JSON response from state request
-
-        Returns:
-            State object with episode_id and step_count
-        """
-        return State(
-            episode_id=payload.get("episode_id"),
-            step_count=payload.get("step_count", 0),
-        )
+    def state(self) -> dict:
+        r = requests.get(f"{self.base_url}/state", timeout=10)
+        r.raise_for_status()
+        return r.json()

@@ -413,8 +413,7 @@ class SupplyChainEnvironment(Environment):
             return f"Shipment '{shipment_id}' not found. Pending: {ids}"
         self.pending_shipments.remove(shipment)
         self.shipments_cancelled.append(shipment_id)
-        f"SUCCESS: Shipment {shipment_id} cancelled."
-
+        return f"SUCCESS: Shipment {shipment_id} cancelled."
     def _tool_get_pending_shipments(self, args: dict) -> str:
         if not self.pending_shipments:
             return "No pending shipments."

@@ -1,255 +1,131 @@
 ---
-title: Supply Chain Env Environment Server
-emoji: 🥁
-colorFrom: red
-colorTo: blue
+title: Supply Chain Environment
+emoji: 🏭
+colorFrom: blue
+colorTo: green
 sdk: docker
 pinned: false
-app_port: 8000
+app_port: 7860
 base_path: /web
 tags:
   - openenv
+  - supply-chain
+  - reinforcement-learning
 ---
 
-# Supply Chain Env Environment
+# Supply Chain Disruption Environment
 
-A simple test environment that echoes back messages. Perfect for testing the env APIs as well as demonstrating environment usage patterns.
+An OpenEnv-compatible AI agent environment for training and evaluating agents
+on real-world supply chain crisis management.
+
+## What Is This?
+
+This environment places an AI agent in the role of a supply chain manager.
+Suppliers fail, shipments get stranded, demand spikes occur — and the agent
+must use tools to inspect the situation, reroute deliveries, and place
+emergency orders before stockouts happen.
+
+**Real-world domain:** Every major company (Amazon, Toyota, hospitals)
+faces these exact crises. An agent that can manage supply chain disruptions
+has immediate, tangible business value.
 
 ## Quick Start
-
-The simplest way to use the Supply Chain Env environment is through the `SupplyChainEnv` class:
-
 ```python
 from supply_chain_env import SupplyChainAction, SupplyChainEnv
 
-try:
-    # Create environment from Docker image
-    supply_chain_envenv = SupplyChainEnv.from_docker_image("supply_chain_env-env:latest")
-
-    # Reset
-    result = supply_chain_envenv.reset()
-    print(f"Reset: {result.observation.echoed_message}")
-
-    # Send multiple messages
-    messages = ["Hello, World!", "Testing echo", "Final message"]
-
-    for msg in messages:
-        result = supply_chain_envenv.step(SupplyChainAction(message=msg))
-        print(f"Sent: '{msg}'")
-        print(f"  → Echoed: '{result.observation.echoed_message}'")
-        print(f"  → Length: {result.observation.message_length}")
-        print(f"  → Reward: {result.reward}")
-
-finally:
-    # Always clean up
-    supply_chain_envenv.close()
-```
-
-That's it! The `SupplyChainEnv.from_docker_image()` method handles:
-- Starting the Docker container
-- Waiting for the server to be ready
-- Connecting to the environment
-- Container cleanup when you call `close()`
-
-## Building the Docker Image
-
-Before using the environment, you need to build the Docker image:
-
-```bash
-# From project root
-docker build -t supply_chain_env-env:latest -f server/Dockerfile .
-```
-
-## Deploying to Hugging Face Spaces
-
-You can easily deploy your OpenEnv environment to Hugging Face Spaces using the `openenv push` command:
-
-```bash
-# From the environment directory (where openenv.yaml is located)
-openenv push
-
-# Or specify options
-openenv push --namespace my-org --private
-```
-
-The `openenv push` command will:
-1. Validate that the directory is an OpenEnv environment (checks for `openenv.yaml`)
-2. Prepare a custom build for Hugging Face Docker space (enables web interface)
-3. Upload to Hugging Face (ensuring you're logged in)
-
-### Prerequisites
-
-- Authenticate with Hugging Face: The command will prompt for login if not already authenticated
-
-### Options
-
-- `--directory`, `-d`: Directory containing the OpenEnv environment (defaults to current directory)
-- `--repo-id`, `-r`: Repository ID in format 'username/repo-name' (defaults to 'username/env-name' from openenv.yaml)
-- `--base-image`, `-b`: Base Docker image to use (overrides Dockerfile FROM)
-- `--private`: Deploy the space as private (default: public)
-
-### Examples
-
-```bash
-# Push to your personal namespace (defaults to username/env-name from openenv.yaml)
-openenv push
-
-# Push to a specific repository
-openenv push --repo-id my-org/my-env
-
-# Push with a custom base image
-openenv push --base-image ghcr.io/meta-pytorch/openenv-base:latest
-
-# Push as a private space
-openenv push --private
-
-# Combine options
-openenv push --repo-id my-org/my-env --base-image custom-base:latest --private
-```
-
-After deployment, your space will be available at:
-`https://huggingface.co/spaces/<repo-id>`
-
-The deployed space includes:
-- **Web Interface** at `/web` - Interactive UI for exploring the environment
-- **API Documentation** at `/docs` - Full OpenAPI/Swagger interface
-- **Health Check** at `/health` - Container health monitoring
-- **WebSocket** at `/ws` - Persistent session endpoint for low-latency interactions
-
-## Environment Details
-
-### Action
-**SupplyChainAction**: Contains a single field
-- `message` (str) - The message to echo back
-
-### Observation
-**SupplyChainObservation**: Contains the echo response and metadata
-- `echoed_message` (str) - The message echoed back
-- `message_length` (int) - Length of the message
-- `reward` (float) - Reward based on message length (length × 0.1)
-- `done` (bool) - Always False for echo environment
-- `metadata` (dict) - Additional info like step count
-
-### Reward
-The reward is calculated as: `message_length × 0.1`
-- "Hi" → reward: 0.2
-- "Hello, World!" → reward: 1.3
-- Empty message → reward: 0.0
-
-## Advanced Usage
-
-### Connecting to an Existing Server
-
-If you already have a Supply Chain Env environment server running, you can connect directly:
-
-```python
-from supply_chain_env import SupplyChainEnv
-
-# Connect to existing server
-supply_chain_envenv = SupplyChainEnv(base_url="<ENV_HTTP_URL_HERE>")
-
-# Use as normal
-result = supply_chain_envenv.reset()
-result = supply_chain_envenv.step(SupplyChainAction(message="Hello!"))
-```
-
-Note: When connecting to an existing server, `supply_chain_envenv.close()` will NOT stop the server.
-
-### Using the Context Manager
-
-The client supports context manager usage for automatic connection management:
-
-```python
-from supply_chain_env import SupplyChainAction, SupplyChainEnv
-
-# Connect with context manager (auto-connects and closes)
-with SupplyChainEnv(base_url="http://localhost:8000") as env:
+with SupplyChainEnv(base_url="http://localhost:7860") as env:
     result = env.reset()
-    print(f"Reset: {result.observation.echoed_message}")
-    # Multiple steps with low latency
-    for msg in ["Hello", "World", "!"]:
-        result = env.step(SupplyChainAction(message=msg))
-        print(f"Echoed: {result.observation.echoed_message}")
+    print(result.observation.text)
+
+    result = env.step(SupplyChainAction(
+        tool="get_inventory",
+        args={}
+    ))
+    result = env.step(SupplyChainAction(
+        tool="place_order",
+        args={"supplier_name": "SupplierA", "product": "bottled_water", "quantity": 200}
+    ))
+    print(f"Reward: {result.reward}, Done: {result.done}")
 ```
 
-The client uses WebSocket connections for:
-- **Lower latency**: No HTTP connection overhead per request
-- **Persistent session**: Server maintains your environment state
-- **Efficient for episodes**: Better for many sequential steps
+## API Endpoints
 
-### Concurrent WebSocket Sessions
+| Endpoint | Method | Description |
+|---|---|---|
+| `/reset` | POST | Reset environment to a new task |
+| `/step` | POST | Execute a tool action |
+| `/state` | GET | Get current episode state |
+| `/health` | GET | Health check |
+| `/docs` | GET | Interactive API documentation |
 
-The server supports multiple concurrent WebSocket connections. To enable this,
-modify `server/app.py` to use factory mode:
-
-```python
-# In server/app.py - use factory mode for concurrent sessions
-app = create_app(
-    SupplyChainEnvironment,  # Pass class, not instance
-    SupplyChainAction,
-    SupplyChainObservation,
-    max_concurrent_envs=4,  # Allow 4 concurrent sessions
-)
+## Action Space
+```json
+{
+  "tool": "place_order",
+  "args": {
+    "supplier_name": "SupplierA",
+    "product": "bottled_water",
+    "quantity": 200
+  }
+}
 ```
 
-Then multiple clients can connect simultaneously:
-
-```python
-from supply_chain_env import SupplyChainAction, SupplyChainEnv
-from concurrent.futures import ThreadPoolExecutor
-
-def run_episode(client_id: int):
-    with SupplyChainEnv(base_url="http://localhost:8000") as env:
-        result = env.reset()
-        for i in range(10):
-            result = env.step(SupplyChainAction(message=f"Client {client_id}, step {i}"))
-        return client_id, result.observation.message_length
-
-# Run 4 episodes concurrently
-with ThreadPoolExecutor(max_workers=4) as executor:
-    results = list(executor.map(run_episode, range(4)))
+## Observation Space
+```json
+{
+  "text": "Human-readable result of the action",
+  "state": {
+    "inventory": {"bottled_water": 50},
+    "steps": 2,
+    "orders_placed": [],
+    "shipments_rerouted": [],
+    "spent_budget": 0.0
+  },
+  "reward": 0.5,
+  "done": false
+}
 ```
 
-## Development & Testing
+## Available Tools
 
-### Direct Environment Testing
+| Tool | Description |
+|---|---|
+| `get_inventory` | Returns current stock levels |
+| `check_supplier_status` | Returns supplier health and lead time |
+| `get_demand_forecast` | Returns daily demand and days until stockout |
+| `place_order` | Places a purchase order |
+| `reroute_shipment` | Redirects stranded shipment to new supplier |
+| `cancel_shipment` | Cancels a pending shipment |
+| `get_pending_shipments` | Lists all in-transit shipments |
 
-Test the environment logic directly without starting the HTTP server:
+## Difficulty Levels
 
+| Level | Scenario | Challenge |
+|---|---|---|
+| Easy | Single product, healthy suppliers | Check inventory → place reorder |
+| Medium | Supplier failure or demand spike | Reroute shipment + emergency order |
+| Hard | Multi-product crisis, budget limit | Prioritize, reroute, order all products |
+
+## Reward Structure
+
+| Score | Meaning |
+|---|---|
+| 0.10 | Agent started acting |
+| 0.50 | Agent placed order or rerouted shipment |
+| 0.75 | Required reroutes completed |
+| 1.00 | All goals fully achieved |
+
+## Running Locally
 ```bash
-# From the server directory
-python3 server/supply_chain_env_environment.py
+pip install openenv-core
+pip install -e .
+uvicorn server.app:app --host 0.0.0.0 --port 7860
 ```
 
-This verifies that:
-- Environment resets correctly
-- Step executes actions properly
-- State tracking works
-- Rewards are calculated correctly
-
-### Running Locally
-
-Run the server locally for development:
-
+## Running Inference
 ```bash
-uvicorn server.app:app --reload
-```
-
-## Project Structure
-
-```
-supply_chain_env/
-├── .dockerignore         # Docker build exclusions
-├── __init__.py            # Module exports
-├── README.md              # This file
-├── openenv.yaml           # OpenEnv manifest
-├── pyproject.toml         # Project metadata and dependencies
-├── uv.lock                # Locked dependencies (generated)
-├── client.py              # SupplyChainEnv client
-├── models.py              # Action and Observation models
-└── server/
-    ├── __init__.py        # Server module exports
-    ├── supply_chain_env_environment.py  # Core environment logic
-    ├── app.py             # FastAPI application (HTTP + WebSocket endpoints)
-    └── Dockerfile         # Container image definition
+export HF_TOKEN=your_token
+export API_BASE_URL=https://router.huggingface.co/v1
+export MODEL_NAME=Qwen/Qwen2.5-72B-Instruct
+python inference.py
 ```
