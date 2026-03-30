@@ -36,11 +36,17 @@ except Exception as e:  # pragma: no cover
     ) from e
 
 try:
-    from ..models import SupplyChainAction, SupplyChainObservation
-    from .supply_chain_env_environment import SupplyChainEnvironment
-except ModuleNotFoundError:
     from models import SupplyChainAction, SupplyChainObservation
     from server.supply_chain_env_environment import SupplyChainEnvironment
+except ImportError:
+    try:
+        from ..models import SupplyChainAction, SupplyChainObservation
+        from .supply_chain_env_environment import SupplyChainEnvironment
+    except ImportError:
+        import sys, os
+        sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        from models import SupplyChainAction, SupplyChainObservation
+        from server.supply_chain_env_environment import SupplyChainEnvironment
 
 
 # Create the app with web interface and README integration
