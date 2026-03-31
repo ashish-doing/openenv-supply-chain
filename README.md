@@ -18,8 +18,9 @@ tags:
 An OpenEnv-compatible reinforcement learning environment where an AI agent
 manages real-world supply chain crises using diagnostic and action tools.
 
-**Live:** [HuggingFace Space](https://huggingface.co/spaces/ashish-doing/supply-chain-env-hf)
-
+**Live Space:** [HuggingFace](https://huggingface.co/spaces/ashish-doing/supply-chain-env-hf)  
+**API Docs:** [Interactive Swagger UI](https://ashish-doing-supply-chain-env-hf.hf.space/docs)  
+**Live Demo:** [Watch agent solve a task](https://ashish-doing-supply-chain-env-hf.hf.space/quick/demo)
 ---
 
 ## What the Agent Does
