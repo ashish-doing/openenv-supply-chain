@@ -53,34 +53,21 @@ class StepRequest(BaseModel):
 
     model_config = {
         "json_schema_extra": {
-            "examples": {
-                "1_get_inventory": {
-                    "summary": "Step 1 - Check inventory",
-                    "value": {"tool": "get_inventory", "args": {}}
-                },
-                "2_check_supplier": {
-                    "summary": "Step 2 - Check supplier status",
-                    "value": {"tool": "check_supplier_status", "args": {"supplier_name": "SupplierA"}}
-                },
-                "3_place_order": {
-                    "summary": "Step 3 - Place order (completes easy task!)",
-                    "value": {"tool": "place_order", "args": {
-                        "supplier_name": "SupplierA",
-                        "product": "bottled_water",
-                        "quantity": 200
-                    }}
-                },
-                "4_reroute_shipment": {
-                    "summary": "Medium task - Reroute stranded shipment",
-                    "value": {"tool": "reroute_shipment", "args": {
-                        "shipment_id": "SHP-001",
-                        "new_supplier": "SupplierB"
-                    }}
-                },
-            }
+            "examples": [
+                {"tool": "get_inventory", "args": {}},
+                {"tool": "check_supplier_status", "args": {"supplier_name": "SupplierA"}},
+                {"tool": "place_order", "args": {
+                    "supplier_name": "SupplierA",
+                    "product": "bottled_water",
+                    "quantity": 200
+                }},
+                {"tool": "reroute_shipment", "args": {
+                    "shipment_id": "SHP-001",
+                    "new_supplier": "SupplierB"
+                }},
+            ]
         }
     }
-
 
 # Custom endpoints
 
