@@ -21,13 +21,12 @@ except ImportError:
         from models import SupplyChainAction, SupplyChainObservation
         from server.supply_chain_env_environment import SupplyChainEnvironment
 
-from fastapi import FastAPI, Body
-from fastapi.responses import RedirectResponse, HTMLResponse
+from fastapi import Body
+from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, Field
-from typing import Any, Dict, Optional
-import requests as req
+from typing import Any, Dict
 
-# ── Create core OpenEnv app ───────────────────────────────────────────────
+# Create core OpenEnv app
 app = create_app(
     SupplyChainEnvironment,
     SupplyChainAction,
@@ -36,7 +35,7 @@ app = create_app(
     max_concurrent_envs=1,
 )
 
-# ── Request/Response models with examples ────────────────────────────────
+# Request models with examples
 
 class ResetRequest(BaseModel):
     task_id: int = Field(default=0, description="Task ID: 0-2=easy, 5-6=medium, 10-11=hard")
@@ -49,14 +48,8 @@ class ResetRequest(BaseModel):
     }
 
 class StepRequest(BaseModel):
-    tool: str = Field(
-        default="get_inventory",
-        description="Tool to call",
-    )
-    args: Dict[str, Any] = Field(
-        default_factory=dict,
-        description="Tool arguments"
-    )
+    tool: str = Field(default="get_inventory", description="Tool to call")
+    args: Dict[str, Any] = Field(default_factory=dict, description="Tool arguments")
 
     model_config = {
         "json_schema_extra": {
@@ -88,12 +81,14 @@ class StepRequest(BaseModel):
         }
     }
 
-# ── Custom clean endpoints ────────────────────────────────────────────────
+
+# Custom endpoints
 
 @app.get("/", include_in_schema=False)
 async def root():
     """Redirect root to interactive docs."""
     return RedirectResponse(url="/docs")
+
 
 @app.post(
     "/quick/reset",
@@ -102,7 +97,7 @@ async def root():
     description="Start a new episode. Use task_id 0-2 for easy, 5-6 for medium, 10-11 for hard."
 )
 async def quick_reset(body: ResetRequest = Body(...)):
-    """Reset the environment with a simple, pre-filled format."""
+    """Reset the environment with a simple pre-filled format."""
     try:
         import httpx
         async with httpx.AsyncClient() as client:
@@ -124,6 +119,7 @@ async def quick_reset(body: ResetRequest = Body(...)):
             }
         }
 
+
 @app.post(
     "/quick/step",
     tags=["Quick Start"],
@@ -131,8 +127,7 @@ async def quick_reset(body: ResetRequest = Body(...)):
     description="Call a tool. Pick from the examples dropdown to see all available actions."
 )
 async def quick_step(body: StepRequest = Body(...)):
-    """Execute a tool with a simple, pre-filled format."""
-    # Create a fresh env for demonstration
+    """Execute a tool with a simple pre-filled format."""
     env = SupplyChainEnvironment()
     env.reset(task_id=0)
     action = SupplyChainAction(tool=body.tool, args=body.args)
@@ -147,6 +142,7 @@ async def quick_step(body: StepRequest = Body(...)):
         "hint": "reward=1.0 means task complete! Try the full /reset + /step sequence for stateful play."
     }
 
+
 @app.get(
     "/quick/demo",
     tags=["Quick Start"],
@@ -157,7 +153,7 @@ async def quick_demo():
     """Auto-runs a complete episode so visitors can see the environment in action."""
     env = SupplyChainEnvironment()
     obs = env.reset(task_id=0)
-    
+
     steps = []
     actions = [
         SupplyChainAction(tool="get_inventory", args={}),
@@ -168,9 +164,14 @@ async def quick_demo():
             "quantity": 200
         }),
     ]
-    
-    steps.append({"step": 0, "event": "reset", "text": obs.text[:120] + "...", "reward": 0.0})
-    
+
+    steps.append({
+        "step": 0,
+        "event": "reset",
+        "text": obs.text[:120] + "...",
+        "reward": 0.0
+    })
+
     for i, action in enumerate(actions):
         result = env.step(action)
         steps.append({
@@ -183,13 +184,13 @@ async def quick_demo():
         })
         if result.done:
             break
-    
+
     return {
-        "task": "Easy Task 0 — Reorder bottled water",
+        "task": "Easy Task 0: Reorder bottled water",
         "result": "SUCCESS" if steps[-1]["reward"] >= 1.0 else "INCOMPLETE",
         "final_reward": steps[-1]["reward"],
         "episode": steps,
-        "message": "This is what an AI agent experiences each step. Reward 1.0 = task solved!"
+        "message": "This is what an AI agent experiences each step. Reward 1.0 means task solved!"
     }
 
 
