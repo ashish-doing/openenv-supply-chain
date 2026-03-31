@@ -111,7 +111,7 @@ async def quick_reset(body: ResetRequest = Body(...)):
     "/quick/step",
     tags=["Quick Start"],
     summary="Execute a tool action (easy to use)",
-    description="Call a tool. Pick from the examples dropdown to see all available actions."
+    description="DEMO ONLY — creates a fresh stateless episode per call. For real stateful multi-step play, use POST /reset first, then POST /step repeatedly."
 )
 async def quick_step(body: StepRequest = Body(...)):
     """Execute a tool with a simple pre-filled format."""
