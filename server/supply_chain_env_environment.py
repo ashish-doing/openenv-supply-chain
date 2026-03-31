@@ -217,7 +217,7 @@ class SupplyChainEnvironment(Environment):
     Implements the OpenEnv Environment interface.
     """
 
-    SUPPORTS_CONCURRENT_SESSIONS: bool = True
+    SUPPORTS_CONCURRENT_SESSIONS: bool = False
     MAX_STEPS: int = 25
 
     def __init__(self):
