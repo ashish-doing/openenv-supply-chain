@@ -1,6 +1,6 @@
 """
 FastAPI application for the Supply Chain Environment.
-Serves the environment over HTTP with pre-filled Swagger examples.
+Serves the environment over HTTP + WebSocket with pre-filled Swagger examples.
 """
 
 try:
@@ -21,12 +21,14 @@ except ImportError:
         from models import SupplyChainAction, SupplyChainObservation
         from server.supply_chain_env_environment import SupplyChainEnvironment
 
-from fastapi import Body
+import json
+from fastapi import Body, WebSocket, WebSocketDisconnect
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, Field
 from typing import Any, Dict
 
-# Create core OpenEnv app
+# ── Core OpenEnv app ──────────────────────────────────────────────────────────
+
 app = create_app(
     SupplyChainEnvironment,
     SupplyChainAction,
@@ -35,7 +37,7 @@ app = create_app(
     max_concurrent_envs=1,
 )
 
-# Request models with examples
+# ── Request models with Swagger examples ──────────────────────────────────────
 
 class ResetRequest(BaseModel):
     task_id: int = Field(default=0, description="Task ID: 0-2=easy, 5-6=medium, 10-11=hard")
@@ -69,11 +71,105 @@ class StepRequest(BaseModel):
         }
     }
 
-# Custom endpoints
+# ── WebSocket endpoint ────────────────────────────────────────────────────────
+
+@app.websocket("/ws")
+async def websocket_endpoint(websocket: WebSocket):
+    """
+    Persistent WebSocket session for low-latency multi-step interaction.
+
+    Each message must be a JSON object with an "action" field:
+
+    Reset:
+        {"action": "reset", "task_id": 0, "seed": 42}
+
+    Step:
+        {"action": "step", "tool": "get_inventory", "args": {}}
+        {"action": "step", "tool": "place_order",
+         "args": {"supplier_name": "SupplierA", "product": "bottled_water", "quantity": 200}}
+
+    State:
+        {"action": "state"}
+
+    The server responds with the same JSON shape as the HTTP endpoints.
+    The connection persists across many reset/step calls — no reconnect needed.
+    """
+    await websocket.accept()
+    env = SupplyChainEnvironment()
+
+    try:
+        while True:
+            raw = await websocket.receive_text()
+            try:
+                msg = json.loads(raw)
+            except json.JSONDecodeError:
+                await websocket.send_text(json.dumps({
+                    "error": "Invalid JSON",
+                    "received": raw[:200]
+                }))
+                continue
+
+            action_type = msg.get("action", "")
+
+            # ── reset ─────────────────────────────────────────────────────────
+            if action_type == "reset":
+                task_id = int(msg.get("task_id", 0))
+                seed    = int(msg.get("seed", 42))
+                try:
+                    obs = env.reset(task_id=task_id, seed=seed)
+                    await websocket.send_text(json.dumps({
+                        "observation": {
+                            "text":   obs.text,
+                            "state":  obs.state,
+                            "reward": obs.reward,
+                            "done":   obs.done,
+                        }
+                    }))
+                except Exception as exc:
+                    await websocket.send_text(json.dumps({"error": str(exc)}))
+
+            # ── step ──────────────────────────────────────────────────────────
+            elif action_type == "step":
+                tool = msg.get("tool", "get_inventory")
+                args = msg.get("args", {})
+                try:
+                    result = env.step(SupplyChainAction(tool=tool, args=args))
+                    await websocket.send_text(json.dumps({
+                        "observation": {
+                            "text":   result.text,
+                            "state":  result.state,
+                            "reward": result.reward,
+                            "done":   result.done,
+                        },
+                        "reward": result.reward,
+                        "done":   result.done,
+                    }))
+                except Exception as exc:
+                    await websocket.send_text(json.dumps({"error": str(exc)}))
+
+            # ── state ─────────────────────────────────────────────────────────
+            elif action_type == "state":
+                try:
+                    state_dict = env._get_state_dict()
+                    await websocket.send_text(json.dumps({"state": state_dict}))
+                except Exception as exc:
+                    await websocket.send_text(json.dumps({"error": str(exc)}))
+
+            # ── unknown ───────────────────────────────────────────────────────
+            else:
+                await websocket.send_text(json.dumps({
+                    "error": f"Unknown action '{action_type}'",
+                    "valid_actions": ["reset", "step", "state"]
+                }))
+
+    except WebSocketDisconnect:
+        pass  # Client disconnected cleanly — nothing to do
+
+
+# ── HTTP convenience endpoints ────────────────────────────────────────────────
 
 @app.get("/", include_in_schema=False)
 async def root():
-    """Redirect root to interactive docs."""
     return RedirectResponse(url="/docs")
 
 
@@ -84,7 +180,6 @@ async def root():
     description="Start a new episode. Use task_id 0-2 for easy, 5-6 for medium, 10-11 for hard."
 )
 async def quick_reset(body: ResetRequest = Body(...)):
-    """Reset the environment with a simple pre-filled format."""
     try:
         import httpx
         async with httpx.AsyncClient() as client:
@@ -114,7 +209,6 @@ async def quick_reset(body: ResetRequest = Body(...)):
     description="DEMO ONLY — creates a fresh stateless episode per call. For real stateful multi-step play, use POST /reset first, then POST /step repeatedly."
 )
 async def quick_step(body: StepRequest = Body(...)):
-    """Execute a tool with a simple pre-filled format."""
     env = SupplyChainEnvironment()
     env.reset(task_id=0)
     action = SupplyChainAction(tool=body.tool, args=body.args)
@@ -134,10 +228,9 @@ async def quick_step(body: StepRequest = Body(...)):
     "/quick/demo",
     tags=["Quick Start"],
     summary="Run a complete demo episode",
-    description="Automatically runs a full easy task from reset to completion. Watch the agent solve it!"
+    description="Automatically runs a full easy task from reset to completion."
 )
 async def quick_demo():
-    """Auto-runs a complete episode so visitors can see the environment in action."""
     env = SupplyChainEnvironment()
     obs = env.reset(task_id=0)
 
@@ -152,12 +245,7 @@ async def quick_demo():
         }),
     ]
 
-    steps.append({
-        "step": 0,
-        "event": "reset",
-        "text": obs.text[:120] + "...",
-        "reward": 0.0
-    })
+    steps.append({"step": 0, "event": "reset", "text": obs.text[:120] + "...", "reward": 0.0})
 
     for i, action in enumerate(actions):
         result = env.step(action)
@@ -180,6 +268,8 @@ async def quick_demo():
         "message": "This is what an AI agent experiences each step. Reward 1.0 means task solved!"
     }
 
+
+# ── Entry point ───────────────────────────────────────────────────────────────
 
 def main(host: str = "0.0.0.0", port: int = 7860):
     import uvicorn

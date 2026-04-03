@@ -6,6 +6,11 @@ runtime: fastapi
 app: server.app:app
 port: 7860
 
+# Required by OpenEnv auto-discovery (AutoEnv / AutoAction)
+action_type: SupplyChainAction
+observation_type: SupplyChainObservation
+state_type: SupplyChainState
+
 description: >
   Supply chain disruption environment for LLM agent training.
   An AI agent acts as a warehouse manager resolving real-world crises:
@@ -76,6 +81,36 @@ observation_space:
       type: boolean
       description: True when reward >= 1.0 or max_steps (25) reached.
 
+reward_shaping:
+  description: >
+    Layered reward system with efficiency bonuses and spam penalty.
+  layers:
+    - name: participation
+      range: [0.05, 0.15]
+      condition: any tool called
+    - name: diagnostics
+      range: [0.05, 0.35]
+      condition: read-only tools used before acting
+    - name: action_taken
+      value: 0.50
+      condition: any order placed or shipment action
+    - name: sub_task
+      value: 0.75
+      condition: key sub-goal completed (reroute, cancel, quality check)
+    - name: goals_met
+      value: 1.00
+      condition: all task objectives satisfied
+    - name: step_efficiency_bonus
+      range: [0.0, 0.15]
+      condition: fewer steps used relative to max_steps
+    - name: budget_efficiency_bonus
+      range: [0.0, 0.10]
+      condition: hard tasks only — budget remaining after goal completion
+  penalties:
+    - name: spam_penalty
+      condition: same tool called more than 5 consecutive times
+      effect: reward reduced, floor at 0.0
+
 tasks:
   fixed:
     - {id: 0,  difficulty: easy,   type: reorder}
@@ -103,3 +138,26 @@ tasks:
 
 max_steps: 25
 reward_range: [0.0, 1.30]
+
+endpoints:
+  - path: /reset
+    method: POST
+    description: Start a new episode. Accepts task_id (int) and optional seed (int).
+  - path: /step
+    method: POST
+    description: Execute one tool action. Body is SupplyChainAction JSON.
+  - path: /state
+    method: GET
+    description: Get current episode state (all 13 fields).
+  - path: /health
+    method: GET
+    description: Liveness check.
+  - path: /ws
+    method: WebSocket
+    description: Persistent WebSocket session for low-latency multi-step interaction.
+  - path: /web
+    method: GET
+    description: Interactive Gradio-style demo UI.
+  - path: /docs
+    method: GET
+    description: Auto-generated OpenAPI documentation.

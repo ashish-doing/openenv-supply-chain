@@ -9,37 +9,59 @@ requires = ["setuptools>=45", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "openenv-supply_chain_env"
-version = "0.1.0"
-description = "Supply Chain Env environment for OpenEnv"
+name = "openenv-supply-chain-env"
+version = "4.0.0"
+description = "Supply Chain Disruption Environment for OpenEnv — multi-step tool-use RL with layered rewards"
+readme = "README.md"
 requires-python = ">=3.10"
+license = { text = "BSD-3-Clause" }
+keywords = ["openenv", "reinforcement-learning", "supply-chain", "tool-use", "rl"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: BSD Software License",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
 dependencies = [
-    # Core OpenEnv runtime (provides FastAPI server + HTTP client types)
-    # install from github
-    # "openenv-core[core] @ git+https://github.com/meta-pytorch/OpenEnv.git",
+    # OpenEnv core runtime
     "openenv-core[core]>=0.2.2",
-    # Environment-specific dependencies
-    # Add all dependencies needed for your environment here
-    # Examples:
-    # "numpy>=1.19.0",
-    # "torch>=2.0.0",
-    # "gymnasium>=0.29.0",
-    # "openspiel>=1.0.0",
-    # "smolagents>=1.22.0,<2",
+    # Server
+    "fastapi>=0.110.0",
+    "uvicorn[standard]>=0.29.0",
+    "pydantic>=2.0.0",
+    # Client / inference
+    "requests>=2.31.0",
+    "openai>=1.0.0",
+    "websockets>=12.0",
 ]
 
 [project.optional-dependencies]
 dev = [
     "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
     "pytest-cov>=4.0.0",
+    "httpx>=0.27.0",
 ]
 
 [project.scripts]
-# Server entry point - enables running via: uv run --project . server
-# or: python -m supply_chain_env.server.app
+# Run server directly: uv run server  OR  python -m supply_chain_env.server.app
 server = "supply_chain_env.server.app:main"
 
 [tool.setuptools]
 include-package-data = true
-packages = ["supply_chain_env", "supply_chain_env.server"]
-package-dir = { "supply_chain_env" = ".", "supply_chain_env.server" = "server" }
+
+[tool.setuptools.packages.find]
+# Auto-discover supply_chain_env and supply_chain_env.server
+where = ["."]
+include = ["supply_chain_env*", "server*"]
+
+[tool.setuptools.package-dir]
+# Root package maps to current directory
+"supply_chain_env" = "."
+"supply_chain_env.server" = "server"
+
+[tool.setuptools.package-data]
+"*" = ["openenv.yaml", "*.md", "*.json", "*.yaml", "*.yml"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
