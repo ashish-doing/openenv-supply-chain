@@ -97,8 +97,12 @@ class SupplyChainEnvironment(Environment):
             reward=0.0,
         )
 
-    def step(self, action: SupplyChainAction) -> SupplyChainObservation:
+    def step(self, action) -> SupplyChainObservation:
         """Execute one agent action and return the next observation + reward."""
+        # Accept both SupplyChainAction objects and raw dicts (from create_app HTTP layer)
+        if isinstance(action, dict):
+            action = SupplyChainAction(**action)
+
         if self.done:
             return SupplyChainObservation(
                 text="Episode is already finished.",
@@ -390,16 +394,12 @@ class SupplyChainEnvironment(Environment):
             score = max(score, 0.05)
 
         # ── Layer 1: diagnostic signals (process reward) ──────────────────────
-        # Reward the agent for *reading before acting*.
-        # Each relevant read tool is worth +0.05 (some task-critical ones +0.10).
-        # Capped at 0.25 from this layer so it can't fake its way to 0.50.
         diagnostic_score = 0.0
-        called = set(self._tool_call_log)   # set — only care if called at all
+        called = set(self._tool_call_log)
 
         if "get_inventory" in called:
             diagnostic_score += 0.05
 
-        # check_supplier_status worth double when a supplier is actually broken
         has_bad_supplier = any(
             s.get("status") in ("failed", "strike")
             for s in self.suppliers.values()
@@ -410,7 +410,6 @@ class SupplyChainEnvironment(Environment):
         if "get_demand_forecast" in called:
             diagnostic_score += 0.05
 
-        # Task-specific read tools: double weight because missing them is a policy error
         if task_type == "price_negotiation" and "get_market_prices" in called:
             diagnostic_score += 0.05
         if task_type == "quality_control" and "get_quality_report" in called:
@@ -444,7 +443,6 @@ class SupplyChainEnvironment(Environment):
             elif self.orders_placed:
                 score = max(score, 0.65)
 
-            # quality_control: extra credit for checking report BEFORE ordering
             if task_type == "quality_control":
                 checked_first = (
                     self._tool_call_log.index("get_quality_report")
@@ -456,7 +454,6 @@ class SupplyChainEnvironment(Environment):
                 if checked_first and self.orders_placed:
                     score = max(score, 0.80)
 
-            # competing_buyer: extra credit for ordering before competitor deadline
             if task_type == "competing_buyer":
                 deadline_still_open = any(
                     v > 0 for v in self._competing_bids_remaining.values()
@@ -468,15 +465,10 @@ class SupplyChainEnvironment(Environment):
         if self._all_goals_met():
             score = 1.0
 
-            # ── Bonus A: step efficiency (up to +0.15) ────────────────────────
-            # Full bonus ≤5 steps, linear decay to 0 at 20 steps.
-            # Step 5 → +0.150   Step 10 → +0.083   Step 15 → +0.017
             if step <= self.MAX_STEPS:
                 eff_bonus = round(0.15 * max(0.0, (20 - step) / 15), 4)
                 score = min(1.15, score + eff_bonus)
 
-            # ── Bonus B: budget efficiency (up to +0.10) ─────────────────────
-            # Any task with a budget cap, not just hard tasks.
             if "budget" in self.task:
                 total = self.task["budget"]
                 if total > 0 and self.spent_budget <= total:
@@ -484,8 +476,6 @@ class SupplyChainEnvironment(Environment):
                     score = min(1.15, score + budget_bonus)
 
         # ── Penalty: duplicate tool spam ─────────────────────────────────────
-        # 2 calls per tool = fine (check + verify). 3+ = spam → -0.02/excess.
-        # Only applied below Layer 4 so a perfect solve can't be dragged below 1.0.
         if score < 1.0:
             call_counts = Counter(self._tool_call_log)
             excess = sum(max(0, n - 2) for n in call_counts.values())
