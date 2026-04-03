@@ -13,9 +13,9 @@ tags:
   - reinforcement-learning
 ---
 
-# Supply Chain Disruption Environment v2
+# Supply Chain Disruption Environment
 
-An OpenEnv-compatible reinforcement learning environment where an AI agent manages real-world supply chain crises — enhanced with adversarial market dynamics, quality control, and price negotiation.
+> **OpenEnv-compatible RL environment** — an AI agent manages real-world supply chain crises across 6 task types, an infinite procedural task pool, adversarial market dynamics, quality control gates, and a reward signal engineered for clean RL training.
 
 **Live Space:** [HuggingFace](https://huggingface.co/spaces/ashish-doing/supply-chain-env-hf)  
 **API Docs:** [Interactive Swagger UI](https://ashish-doing-supply-chain-env-hf.hf.space/docs)  
@@ -23,9 +23,40 @@ An OpenEnv-compatible reinforcement learning environment where an AI agent manag
 
 ---
 
+## Why this environment
+
+Most RL environments for LLMs are either too simple (toy grids, word games) or too narrow (one task type, fixed scenarios). This environment is designed to train agents that can reason under pressure in logistics — a domain with real economic stakes, multi-step dependencies, and adversarial elements.
+
+| Property | This environment |
+|----------|-----------------|
+| Domain | Real-world warehouse operations |
+| Task variety | 6 distinct crisis types + infinite procedural pool |
+| Adversarial element | Competing buyer locks supplier capacity in real time |
+| Quality gate | Orders from defective suppliers are hard-rejected |
+| Reward signal | Layered partial credit + efficiency bonuses (ideal for GRPO) |
+| State diversity | Any integer task ID → unique reproducible episode |
+| Max steps | 25 per episode |
+
+---
+
+## Pre-submission Checklist
+
+| Check | Status |
+|-------|--------|
+| HF Space deploys — `/health` returns 200 | ✅ |
+| `openenv.yaml` valid — typed models, step/reset/state | ✅ |
+| Dockerfile builds | ✅ |
+| `inference.py` produces `[START]`/`[STEP]`/`[END]` logs | ✅ |
+| 3+ tasks with graders, scores in 0.0–1.30 | ✅ (10 fixed + infinite procedural) |
+| `python validate.py` → 85/85 checks pass | ✅ |
+
+---
+
 ## What the Agent Does
 
-The agent plays a warehouse manager. Each step it calls one tool, receives a text observation and a reward score, and must reach the goal before running out of steps (max 25).
+The agent plays a warehouse manager. Each step it calls exactly one tool, receives a text observation and a reward score, and must reach the goal before running out of steps (max 25).
+
+The agent must reason across multiple steps: diagnose the situation with read-only tools, then act decisively. Calling the wrong supplier, ignoring defect rates, or missing the competitor countdown all lead to partial or zero reward.
 
 ---
 
@@ -58,7 +89,7 @@ The agent plays a warehouse manager. Each step it calls one tool, receives a tex
 
 ---
 
-### Medium — Task 7 · `price_negotiation` 🆕
+### Medium — Task 7 · `price_negotiation`
 
 **Scenario:** Critical shortage. 3 suppliers with different prices. Budget cap enforced.  
 **Goal:** Use `get_market_prices` → find cheapest healthy supplier → order within budget.
@@ -67,29 +98,41 @@ The agent plays a warehouse manager. Each step it calls one tool, receives a tex
 |-------|-----------|
 | 0.10 | Agent took at least one action |
 | 0.50 | Agent placed any order |
-| 1.00 | Correct supplier (cheapest healthy), correct product, quantity ≥ 400, within budget |
+| 1.00 | Correct supplier (cheapest healthy), correct product, quantity ≥ goal, within budget |
 
 ---
 
-### Hard — Tasks 10, 11 · `multi_product_crisis` / `port_strike`
+### Hard — Task 10 · `multi_product_crisis`
 
-**Scenario:** Multi-product crisis, budget constraint, supplier on strike.  
-**Goal:** Assess all suppliers → cancel/reroute shipment → order ALL products within budget.
+**Scenario:** Three products critically low simultaneously, budget constraint, one supplier failed.  
+**Goal:** Assess all suppliers → reroute stranded shipment → order ALL products within budget.
 
 | Score | Condition |
 |-------|-----------|
 | 0.10 | Agent took at least one action |
 | 0.50 | Agent placed any order or rerouted any shipment |
-| 0.75 | Required shipment action (cancel/reroute) completed |
-| 1.00+ | All product orders placed with correct suppliers within budget |
-
-> **Budget-efficiency bonus:** On hard tasks, reward scales up to 1.15 based on how much budget remains. Spending only 50% of budget yields ~1.075. This creates a rich continuous reward surface for RL training.
+| 0.75 | Required reroute completed |
+| 1.00+ | All product orders placed with correct suppliers within budget + efficiency bonus |
 
 ---
 
-### Hard — Task 12 · `quality_control` 🆕
+### Hard — Task 11 · `port_strike`
 
-**Scenario:** Defective supplier batches detected in medical supply chain. SupplierA has 35% defect rate — unacceptable. Only suppliers with < 5% defect rate may be used.  
+**Scenario:** All overseas suppliers on strike. Shipment stuck at port. Only one domestic supplier available.  
+**Goal:** Assess supplier statuses → cancel the stuck shipment → order all products from the only available supplier.
+
+| Score | Condition |
+|-------|-----------|
+| 0.10 | Agent took at least one action |
+| 0.50 | Agent placed any order or cancelled shipment |
+| 0.75 | Stuck shipment cancelled |
+| 1.00+ | All orders placed with the available domestic supplier within budget + efficiency bonus |
+
+---
+
+### Hard — Task 12 · `quality_control`
+
+**Scenario:** Defective supplier batches detected in a medical supply chain. SupplierA has a 35% defect rate — unacceptable. Only suppliers with defect rate below the threshold may be used.  
 **Goal:** Use `get_quality_report` → cancel defective shipment → order ONLY from compliant suppliers.
 
 | Score | Condition |
@@ -99,19 +142,73 @@ The agent plays a warehouse manager. Each step it calls one tool, receives a tex
 | 0.75 | Defective shipment cancelled |
 | 1.00+ | All orders placed with quality-compliant suppliers + efficiency bonus |
 
+> **Quality gate:** Orders placed with suppliers whose defect rate exceeds the threshold are hard-rejected with an `Order REJECTED` response. The agent must call `get_quality_report` to identify compliant suppliers first.
+
 ---
 
-### Hard — Task 13 · `competing_buyer` 🆕 (Adversarial)
+### Hard — Task 13 · `competing_buyer` (Adversarial)
 
-**Scenario:** A rival company (RivalCorp) is also bidding for the same limited semiconductor supply from SupplierA. The competitor will lock up capacity in ~6 steps. Time pressure is real.  
-**Goal:** Use `get_competing_bids` → act fast to secure semiconductors before competitor → also order capacitors.
+**Scenario:** RivalCorp is bidding for the same limited semiconductor supply. The competitor will lock up capacity in ~6 steps. Time pressure is real — every step counts.  
+**Goal:** Use `get_competing_bids` → secure product before competitor → also order second product.
 
 | Score | Condition |
 |-------|-----------|
 | 0.10 | Agent took at least one action |
 | 0.50 | Agent placed any order |
-| 0.75 | Semiconductor secured before competitor locked capacity |
+| 0.75 | Primary product secured before competitor locked capacity |
 | 1.00+ | Both products ordered + efficiency bonus |
+
+> **Countdown mechanic:** Every step, `competing_bids_countdown` in the state dict decrements. When it reaches zero, the competitor places their order and reduces `remaining_capacity` on the supplier — possibly making the goal unreachable.
+
+---
+
+## Reward Structure
+
+Rewards are layered. Partial credit on every step makes this environment suitable for GRPO and other policy gradient methods that need dense reward signals.
+
+| Layer | Range | Condition |
+|-------|-------|-----------|
+| Participation | 0.10 | Any action taken |
+| Sub-task credit | 0.50–0.75 | Partial goals met (reroute, cancel, any order) |
+| All goals met | 1.00 | All task objectives satisfied |
+| Step efficiency bonus | +0.00–0.15 | Fewer steps = higher bonus |
+| Budget efficiency bonus | +0.00–0.10 | Budget remaining on hard tasks |
+| **Maximum** | **≤ 1.30** | Goals + max step bonus + max budget bonus |
+
+**Spam penalty:** Calling the same tool more than 5 consecutive times applies a reward penalty. At 8 identical consecutive calls reward drops below 0.20. This discourages degenerate exploration strategies and forces the agent to actually reason between tool calls.
+
+**Why this matters for RL training:** The layered reward avoids the sparse reward problem. An agent that does nothing scores 0.0. An agent that takes any action scores at least 0.10. An agent that makes progress on sub-tasks scores 0.50–0.75. Only an agent that reasons correctly about the full situation reaches 1.0+. This gradient is what GRPO needs to learn.
+
+---
+
+## Procedural Task Generation
+
+In addition to the 10 fixed tasks, the environment generates an infinite pool of deterministic tasks from any integer task ID.
+
+| Task ID range | Difficulty | Type |
+|---------------|------------|------|
+| 0–13 | Fixed | Backward compatible (see table above) |
+| 14–49 | Easy | `reorder` |
+| 50–99 | Medium | `reroute` / `demand_spike` (alternating by parity) |
+| 100–149 | Medium | `price_negotiation` |
+| 150–199 | Hard | `multi_product_crisis` |
+| 200–249 | Hard | `quality_control` |
+| 250–299 | Hard | `competing_buyer` |
+| 300+ | Hard | Cycles through all hard types |
+
+**Determinism guarantee:** `generate_task(task_id)` always returns the same task for the same ID. The RNG seed is the task_id itself — training runs are fully reproducible.
+
+```python
+from generate_tasks import generate_task
+
+task_a = generate_task(175)   # hard multi_product_crisis, always identical
+task_b = generate_task(42)    # easy reorder, always identical
+task_c = generate_task(220)   # hard quality_control, always identical
+
+# Use in training loop:
+for episode in range(1000):
+    obs = env.reset(task_id=episode % 300)   # cycles through all types
+```
 
 ---
 
@@ -119,16 +216,16 @@ The agent plays a warehouse manager. Each step it calls one tool, receives a tex
 
 | Tool | Arguments | Description |
 |------|-----------|-------------|
-| `get_inventory` | none | Current stock levels with days-until-stockout |
-| `check_supplier_status` | `supplier_name` | Supplier health, lead time, cost, capacity |
+| `get_inventory` | none | Current stock levels with days-until-stockout and threshold warnings |
+| `check_supplier_status` | `supplier_name` | Supplier health, lead time, cost/unit, remaining capacity |
 | `get_demand_forecast` | `product` | Daily demand and days until stockout |
-| `place_order` | `supplier_name`, `product`, `quantity` | Place a purchase order |
-| `reroute_shipment` | `shipment_id`, `new_supplier` | Redirect a stranded shipment |
-| `cancel_shipment` | `shipment_id` | Cancel a stuck/defective shipment |
-| `get_pending_shipments` | none | List all in-transit shipments |
-| `get_market_prices` | none | 🆕 Compare all supplier quotes and budget impact |
-| `get_quality_report` | none | 🆕 Defect rates per supplier vs threshold |
-| `get_competing_bids` | none | 🆕 Competing buyer urgency countdown |
+| `place_order` | `supplier_name`, `product`, `quantity` | Place a purchase order (quality and budget gates enforced) |
+| `reroute_shipment` | `shipment_id`, `new_supplier` | Redirect a stranded shipment to a healthy supplier |
+| `cancel_shipment` | `shipment_id` | Cancel a stuck or defective-source shipment |
+| `get_pending_shipments` | none | List all in-transit shipments with IDs |
+| `get_market_prices` | none | Compare all supplier quotes and budget impact |
+| `get_quality_report` | none | Defect rates per supplier vs acceptable threshold |
+| `get_competing_bids` | none | Competing buyer urgency and steps-until-lockout countdown |
 
 ---
 
@@ -138,8 +235,8 @@ The agent plays a warehouse manager. Each step it calls one tool, receives a tex
 |----------|--------|-------------|
 | `/reset?task_id=0` | POST | Start a new episode |
 | `/step` | POST | Execute one tool action |
-| `/state` | GET | Current episode state |
-| `/health` | GET | Liveness check |
+| `/state` | GET | Full episode state (13 fields, always present) |
+| `/health` | GET | Liveness check — returns `{"status":"healthy"}` |
 | `/docs` | GET | Interactive Swagger UI |
 | `/quick/demo` | GET | Auto-runs a complete demo episode |
 
@@ -164,6 +261,10 @@ The agent plays a warehouse manager. Each step it calls one tool, receives a tex
 {
   "text": "SUCCESS: Order placed! Supplier: SupplierA ...",
   "state": {
+    "task_id": 0,
+    "task_type": "reorder",
+    "difficulty": "easy",
+    "goal_description": "Warehouse stocks bottled water...",
     "inventory": {"bottled_water": 50},
     "steps": 2,
     "max_steps": 25,
@@ -173,8 +274,6 @@ The agent plays a warehouse manager. Each step it calls one tool, receives a tex
     "pending_shipments": [],
     "spent_budget": 0.0,
     "remaining_budget": 2000.0,
-    "task_type": "reorder",
-    "difficulty": "easy",
     "competing_bids_countdown": {"semiconductor": 5}
   },
   "reward": 0.5,
@@ -182,22 +281,23 @@ The agent plays a warehouse manager. Each step it calls one tool, receives a tex
 }
 ```
 
+The `state` dict always contains all 13 keys. `remaining_budget` is present on tasks with a budget constraint. `competing_bids_countdown` is only populated for `competing_buyer` tasks.
+
 ---
 
-## Enhancements over v1 (inspired by SF reference projects)
+## Task Summary
 
-| Feature | Inspired by | What changed |
-|---------|-------------|--------------|
-| 3 new task types | Reasoning Gym (task diversity) | price_negotiation, quality_control, competing_buyer |
-| Budget-efficiency bonus | CARLA (continuous reward surface) | Hard rewards scale 1.0–1.15 based on budget saved |
-| Adversarial competing buyer | Calendar Env (multi-agent coordination) | Countdown mechanic — competitor locks capacity after N steps |
-| Quality gate enforcement | TB2 Env (multi-hop reasoning) | Orders from defective suppliers are rejected |
-| get_market_prices tool | Calendar Env (rich tool set) | Compare quotes, budget impact, quote validity |
-| get_quality_report tool | Reasoning Gym (programmatic grading) | Defect rates, pass/fail verdict per supplier |
-| get_competing_bids tool | CARLA (real-time state) | Urgency countdown visible to agent |
-| Max steps raised to 25 | All reference envs | Enables long-horizon reasoning evaluation |
-| State includes max_steps | All reference envs | Agent can plan step budget |
-| Dense inventory feedback | REPL Env (rich observations) | Stockout days + threshold status per product |
+| Task ID | Difficulty | Type | Key challenge |
+|---------|------------|------|---------------|
+| 0, 1, 2 | Easy | `reorder` | Basic inventory check + reorder |
+| 5 | Medium | `reroute` | Supplier failure + shipment reroute |
+| 6 | Medium | `demand_spike` | 3× demand spike detection |
+| 7 | Medium | `price_negotiation` | Find cheapest healthy supplier under budget |
+| 10 | Hard | `multi_product_crisis` | 3 products + budget + reroute |
+| 11 | Hard | `port_strike` | Strike scenario + cancel + domestic supplier only |
+| 12 | Hard | `quality_control` | Defect rate gate + cancel defective shipment |
+| 13 | Hard | `competing_buyer` | Adversarial time pressure + capacity lock |
+| 14–299 | Procedural | all types | Infinite deterministic task pool |
 
 ---
 
@@ -212,28 +312,87 @@ uvicorn server.app:app --host 0.0.0.0 --port 7860
 ## Running Inference
 
 ```bash
-export HF_TOKEN=your_token
+export HF_TOKEN=your_hf_token
 export API_BASE_URL=https://router.huggingface.co/v1
-export MODEL_NAME=Qwen/Qwen2.5-72B-Instruct
+export MODEL_NAME=Qwen/Qwen2.5-7B-Instruct
+export ENV_BASE_URL=https://ashish-doing-supply-chain-env-hf.hf.space
 python inference.py
 ```
+
+> Use `Qwen/Qwen2.5-7B-Instruct` or smaller for inference — the 72B model may exceed the 20-minute runtime limit on constrained hardware. The 7B model completes all 10 tasks in under 6 minutes.
 
 ## Pre-submission Validation
 
 ```bash
 python validate.py
-# Expected: STATUS: READY TO SUBMIT ✓
+# Expected output:
+# 85/85 checks across 14 sections
+# STATUS: READY TO SUBMIT ✓
 ```
 
-## Task Summary
+---
 
-| Task ID | Difficulty | Type | Key Challenge |
-|---------|------------|------|---------------|
-| 0, 1, 2 | Easy | reorder | Basic inventory check + reorder |
-| 5 | Medium | reroute | Supplier failure + shipment reroute |
-| 6 | Medium | demand_spike | 3× demand spike detection |
-| 7 | Medium | price_negotiation 🆕 | Find cheapest healthy supplier under budget |
-| 10 | Hard | multi_product_crisis | 3 products + budget + reroute |
-| 11 | Hard | port_strike | Strike scenario + cancel + domestic supplier |
-| 12 | Hard | quality_control 🆕 | Defect rate gate + cancel defective shipment |
-| 13 | Hard | competing_buyer 🆕 | Adversarial time pressure + capacity lock |
+## Repository Structure
+
+```
+openenv-supply-chain/
+├── server/
+│   ├── app.py                          # FastAPI server — OpenEnv endpoints
+│   └── supply_chain_env_environment.py # Environment logic (all 6 task types)
+├── generate_tasks.py                   # Procedural task generator (fixed + infinite pool)
+├── models.py                           # Pydantic typed models (Action, Observation, State)
+├── client.py                           # Python client for training code
+├── inference.py                        # Baseline LLM agent — emits [START]/[STEP]/[END] logs
+├── validate.py                         # Pre-submission validator (85 checks)
+├── openenv.yaml                        # OpenEnv spec config
+├── Dockerfile                          # Container definition
+└── pyproject.toml                      # Package config
+```
+
+---
+
+## Enhancements over v1
+
+| Feature | What changed |
+|---------|--------------|
+| 6 task types | Added `price_negotiation`, `port_strike`, `quality_control`, `competing_buyer` |
+| Procedural generator | Any integer ID → valid deterministic task — infinite training variety |
+| Spam penalty | Reward penalty for calling same tool > 5 times consecutively |
+| Step efficiency bonus | Up to +0.15 for faster solutions — rewards decisive reasoning |
+| Budget efficiency bonus | Up to +0.10 on hard tasks based on budget remaining |
+| `_tool_call_log` | Full per-episode tool call history for debugging and reward computation |
+| Quality gate | Orders from defective suppliers hard-rejected — agent must check first |
+| Competing buyer countdown | Competitor locks capacity after N steps — real time pressure |
+| 3 new tools | `get_market_prices`, `get_quality_report`, `get_competing_bids` |
+| Max steps raised to 25 | Enables long-horizon reasoning evaluation |
+| State dict standardised | All 13 fields always present — reliable for automated evaluation |
+| Reward ceiling 1.30 | Accommodates stacked step + budget bonuses |
+
+---
+
+## Changelog
+
+### v4 (current)
+- Corrected task ID mapping in validator (sections 8–11).
+- Procedural task generator: any integer task ID now produces a valid deterministic task.
+- Added `_tool_call_log`, spam penalty, step efficiency bonus, and budget efficiency bonus.
+- Validator expanded to 85 checks across 14 sections.
+- Reward upper bound raised to 1.30 to accommodate stacked bonuses.
+- State dict standardised to 13 fields; `goal_description` and `task_type` added.
+- `inference.py` updated to emit exact `[START]`/`[STEP]`/`[END]` judge log format.
+- Default inference model changed to `Qwen/Qwen2.5-7B-Instruct` for runtime compliance.
+
+### v3
+- Added `quality_control` and `competing_buyer` task types.
+- Added `get_quality_report`, `get_market_prices`, `get_competing_bids` tools.
+- Competing buyer countdown mechanic and quality gate enforcement.
+
+### v2
+- Added `price_negotiation` task type and `get_market_prices` tool.
+- Max steps raised from 15 to 25.
+- Budget-efficiency bonus for hard tasks.
+- State dict includes `remaining_budget` and `spent_budget`.
+
+### v1
+- Initial release: `reorder`, `reroute`, `demand_spike` task types.
+- 7 tools, 6 fixed tasks, basic layered reward structure.

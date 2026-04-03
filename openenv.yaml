@@ -1,8 +1,105 @@
 spec_version: 1
 name: supply_chain_env
+version: "4.0.0"
 type: space
 runtime: fastapi
 app: server.app:app
 port: 7860
-description: "Supply chain crisis management environment for LLM agent training"
-version: "0.1.0"
+
+description: >
+  Supply chain disruption environment for LLM agent training.
+  An AI agent acts as a warehouse manager resolving real-world crises:
+  supplier failures, demand spikes, port strikes, quality control violations,
+  adversarial competing buyers, and multi-product budget constraints.
+  Features 6 task types, 10 fixed tasks, and an infinite procedural task pool
+  (any integer task_id generates a unique reproducible episode).
+  Reward is layered (0.10 → 0.50 → 0.75 → 1.00 → 1.30) for dense RL training signals.
+
+tags:
+  - openenv
+  - supply-chain
+  - reinforcement-learning
+  - tool-use
+  - multi-step
+  - adversarial
+  - real-world
+
+action_space:
+  type: tool_call
+  description: >
+    Agent calls exactly one tool per step and provides arguments as a JSON object.
+  fields:
+    tool:
+      type: string
+      description: >
+        Name of the tool to call. One of:
+        get_inventory, check_supplier_status, get_demand_forecast,
+        place_order, reroute_shipment, cancel_shipment, get_pending_shipments,
+        get_market_prices, get_quality_report, get_competing_bids
+    args:
+      type: object
+      description: >
+        Key-value arguments for the tool.
+        Examples:
+          get_inventory         -> {}
+          check_supplier_status -> {"supplier_name": "SupplierA"}
+          place_order           -> {"supplier_name": "SupplierA", "product": "bottled_water", "quantity": 200}
+          reroute_shipment      -> {"shipment_id": "SHP-001", "new_supplier": "SupplierB"}
+          cancel_shipment       -> {"shipment_id": "SHP-001"}
+          get_demand_forecast   -> {"product": "bottled_water"}
+
+observation_space:
+  type: structured
+  description: >
+    Text observation from the tool result plus a full structured state dict.
+  fields:
+    text:
+      type: string
+      description: Human-readable result of the last tool call.
+    state:
+      type: object
+      description: >
+        Full episode state. Always contains all 13 keys:
+        task_id, task_type, difficulty, goal_description,
+        inventory, steps, max_steps,
+        orders_placed, shipments_rerouted, shipments_cancelled, pending_shipments,
+        spent_budget, remaining_budget.
+        competing_bids_countdown is additionally present on competing_buyer tasks.
+    reward:
+      type: float
+      description: >
+        Reward for this step. Range 0.0–1.30.
+        Layered: 0.10 (any action), 0.50 (order/reroute),
+        0.75 (key sub-task), 1.00 (all goals met),
+        up to +0.15 step efficiency bonus, up to +0.10 budget efficiency bonus.
+    done:
+      type: boolean
+      description: True when reward >= 1.0 or max_steps (25) reached.
+
+tasks:
+  fixed:
+    - {id: 0,  difficulty: easy,   type: reorder}
+    - {id: 1,  difficulty: easy,   type: reorder}
+    - {id: 2,  difficulty: easy,   type: reorder}
+    - {id: 5,  difficulty: medium, type: reroute}
+    - {id: 6,  difficulty: medium, type: demand_spike}
+    - {id: 7,  difficulty: medium, type: price_negotiation}
+    - {id: 10, difficulty: hard,   type: multi_product_crisis}
+    - {id: 11, difficulty: hard,   type: port_strike}
+    - {id: 12, difficulty: hard,   type: quality_control}
+    - {id: 13, difficulty: hard,   type: competing_buyer}
+  procedural:
+    description: >
+      Any integer task_id generates a unique deterministic task.
+      Seed = task_id for reproducibility.
+    ranges:
+      - {ids: "14-49",   difficulty: easy,   type: reorder}
+      - {ids: "50-99",   difficulty: medium, type: "reroute / demand_spike"}
+      - {ids: "100-149", difficulty: medium, type: price_negotiation}
+      - {ids: "150-199", difficulty: hard,   type: multi_product_crisis}
+      - {ids: "200-249", difficulty: hard,   type: quality_control}
+      - {ids: "250-299", difficulty: hard,   type: competing_buyer}
+      - {ids: "300+",    difficulty: hard,   type: cycles_all_hard_types}
+
+max_steps: 25
+reward_range: [0.0, 1.30]
