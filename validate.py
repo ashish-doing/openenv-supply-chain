@@ -375,7 +375,7 @@ if HAS_REQUESTS:
         check("reset response has 'state'", "state" in obs_data)
 
         rs = requests.post(f"{BASE_URL}/step",
-                           json={"tool":"get_inventory","args":{}}, timeout=10)
+                   json={"action": {"tool":"get_inventory","args":{}}}, timeout=10)
         check("POST /step returns 200",     rs.status_code == 200, str(rs.status_code))
 
         for tid in [0, 1, 2, 5, 6, 7, 10, 11, 12, 13]:
