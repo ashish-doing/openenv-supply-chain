@@ -103,6 +103,10 @@ class SupplyChainEnvironment(Environment):
         if isinstance(action, dict):
             action = SupplyChainAction(**action)
 
+        # Auto-reset if no task loaded (create_app may call step on a fresh instance)
+        if self.task is None:
+            self.reset(task_id=0)
+
         if self.done:
             return SupplyChainObservation(
                 text="Episode is already finished.",
