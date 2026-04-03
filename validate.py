@@ -2,9 +2,10 @@
 validate.py — Pre-submission validator (v4 corrected)
 
 Run:   python validate.py
+       python validate.py --url https://your-space.hf.space
 Pass:  STATUS: READY TO SUBMIT ✓
 """
-import os, sys
+import os, sys, argparse
 
 try:
     import requests
@@ -12,7 +13,12 @@ try:
 except ImportError:
     HAS_REQUESTS = False
 
-BASE_URL = os.environ.get("ENV_BASE_URL", "http://localhost:7860")
+_parser = argparse.ArgumentParser()
+_parser.add_argument("--url", default=None)
+_args, _ = _parser.parse_known_args()
+
+BASE_URL = _args.url or os.environ.get("ENV_BASE_URL", "http://localhost:7860")
+
 results  = []
 
 def check(label, ok, detail=""):
@@ -24,6 +30,7 @@ def check(label, ok, detail=""):
 print("=" * 60)
 print("  Supply Chain Env v4 — Pre-submission Validator")
 print("=" * 60)
+print(f"  Target URL: {BASE_URL}")
 
 # ── 1. Required files ─────────────────────────────────────────────────────────
 print("\n[1] Required files")
@@ -136,7 +143,6 @@ except Exception as e:
     check("Reward layers", False, str(e))
 
 # ── 6. All 10 fixed task IDs — CORRECT type + difficulty ─────────────────────
-# Ground truth from generate_tasks.py _FIXED_TASKS dict
 print("\n[6] Fixed task IDs — type and difficulty")
 EXPECTED = {
     0:  ("easy",   "reorder"),
@@ -164,7 +170,6 @@ except Exception as e:
     check("Fixed task IDs", False, str(e))
 
 # ── 7. All task types have required fields ────────────────────────────────────
-# Using correct task IDs for each type
 print("\n[7] Task type required fields")
 try:
     # price_negotiation → task 7
@@ -212,13 +217,13 @@ TOOL_TESTS = [
     (0,  "get_inventory",           {}),
     (0,  "check_supplier_status",   {"supplier_name":"SupplierA"}),
     (0,  "get_demand_forecast",     {"product":"bottled_water"}),
-    (5,  "get_pending_shipments",   {}),                                          # task 5 has pending shipments
+    (5,  "get_pending_shipments",   {}),
     (5,  "reroute_shipment",        {"shipment_id":"SHP-001","new_supplier":"SupplierB"}),
-    (11, "cancel_shipment",         {"shipment_id":"SHP-011"}),                   # task 11 has SHP-011
+    (11, "cancel_shipment",         {"shipment_id":"SHP-011"}),
     (0,  "place_order",             {"supplier_name":"SupplierA","product":"bottled_water","quantity":50}),
-    (7,  "get_market_prices",       {}),                                          # task 7 is price_negotiation
-    (12, "get_quality_report",      {}),                                          # task 12 is quality_control
-    (13, "get_competing_bids",      {}),                                          # task 13 is competing_buyer
+    (7,  "get_market_prices",       {}),
+    (12, "get_quality_report",      {}),
+    (13, "get_competing_bids",      {}),
 ]
 try:
     for tid, tool, args in TOOL_TESTS:
@@ -230,10 +235,8 @@ except Exception as e:
     check("Tools", False, str(e))
 
 # ── 9. Quality gate enforcement ───────────────────────────────────────────────
-# task 12 = quality_control: SupplierA defect_rate=0.35 (bad), SupplierB defect_rate=0.04 (good)
 print("\n[9] Quality gate enforcement")
 try:
-    # SupplierA defect rate 35% → must be rejected
     env.reset(task_id=12)
     bad_product = list(env.task["initial_inventory"].keys())[0]
     r_bad = env.step(SupplyChainAction(
@@ -244,7 +247,6 @@ try:
           "REJECTED" in r_bad.text or "defect" in r_bad.text.lower(),
           r_bad.text[:80])
 
-    # SupplierB defect rate 4% → must succeed
     env.reset(task_id=12)
     r_good = env.step(SupplyChainAction(
         tool="place_order",
@@ -257,7 +259,6 @@ except Exception as e:
     check("Quality gate", False, str(e))
 
 # ── 10. Competing buyer countdown mechanic ────────────────────────────────────
-# task 13 = competing_buyer
 print("\n[10] Competing buyer countdown")
 try:
     env.reset(task_id=13)
@@ -272,7 +273,6 @@ try:
     check("State exposes countdown",
           "competing_bids_countdown" in env._get_state_dict())
 
-    # When countdown hits 0, competitor reduces supplier capacity
     env2 = SupplyChainEnvironment()
     env2.reset(task_id=13)
     prod2    = list(env2.task["competing_bids"].keys())[0]
@@ -308,7 +308,6 @@ except Exception as e:
 # ── 12. Efficiency bonuses ────────────────────────────────────────────────────
 print("\n[12] Efficiency bonuses")
 try:
-    # Step efficiency: 1-step solve on task 0 must score > 10-step solve
     env.reset(task_id=0)
     r_fast = env.step(SupplyChainAction(
         tool="place_order",
@@ -326,11 +325,7 @@ try:
           r_fast.reward > r_slow.reward, f"fast={r_fast.reward:.4f} slow={r_slow.reward:.4f}")
     check("Fast solve reward >= 1.10",  r_fast.reward >= 1.10, str(r_fast.reward))
 
-    # Budget efficiency: hard task 10 has budget — spending less should score higher
-    # Two solves: one efficient (low spend), one wasteful (high spend)
-    # We test by comparing a full correct solve against the max reward cap
     env.reset(task_id=10)
-    # Reroute first, then place all 3 orders with correct suppliers
     env.step(SupplyChainAction(tool="reroute_shipment",
         args={"shipment_id":"SHP-010","new_supplier":"SupplierD"}))
     env.step(SupplyChainAction(tool="place_order",
@@ -349,7 +344,6 @@ except Exception as e:
 # ── 13. State dict completeness ───────────────────────────────────────────────
 print("\n[13] State dict completeness")
 try:
-    # task 10 = hard with budget → remaining_budget must be present
     env.reset(task_id=10)
     env.step(SupplyChainAction(tool="get_inventory", args={}))
     s = env._get_state_dict()
@@ -359,7 +353,6 @@ try:
                 "pending_shipments","spent_budget","remaining_budget"]:
         check(f"State has '{key}'", key in s, str(s.get(key, "MISSING")))
 
-    # task 13 = competing_buyer → countdown must be in state
     env.reset(task_id=13)
     env.step(SupplyChainAction(tool="get_inventory", args={}))
     s2 = env._get_state_dict()
@@ -369,28 +362,28 @@ except Exception as e:
     check("State dict", False, str(e))
 
 # ── 14. Server HTTP endpoints ─────────────────────────────────────────────────
-print("\n[14] Server HTTP endpoints (skip if not running)")
+print("\n[14] Server HTTP endpoints")
 if HAS_REQUESTS:
     try:
-        h = requests.get(f"{BASE_URL}/health", timeout=3)
+        h = requests.get(f"{BASE_URL}/health", timeout=5)
         check("GET /health returns 200",    h.status_code == 200, str(h.status_code))
 
-        rr = requests.post(f"{BASE_URL}/reset", params={"task_id":0}, timeout=5)
+        rr = requests.post(f"{BASE_URL}/reset", params={"task_id":0}, timeout=10)
         check("POST /reset returns 200",    rr.status_code == 200, str(rr.status_code))
         obs_data = rr.json().get("observation", rr.json())
         check("reset response has 'text'",  "text"  in obs_data)
         check("reset response has 'state'", "state" in obs_data)
 
         rs = requests.post(f"{BASE_URL}/step",
-                           json={"tool":"get_inventory","args":{}}, timeout=5)
+                           json={"tool":"get_inventory","args":{}}, timeout=10)
         check("POST /step returns 200",     rs.status_code == 200, str(rs.status_code))
 
         for tid in [0, 1, 2, 5, 6, 7, 10, 11, 12, 13]:
-            rr2 = requests.post(f"{BASE_URL}/reset", params={"task_id":tid}, timeout=5)
+            rr2 = requests.post(f"{BASE_URL}/reset", params={"task_id":tid}, timeout=10)
             check(f"POST /reset task_id={tid} → 200",
                   rr2.status_code == 200, str(rr2.status_code))
     except requests.exceptions.ConnectionError:
-        print("  [SKIP] Server not running — OK for local validation")
+        print(f"  [SKIP] Could not connect to {BASE_URL}")
         print(f"         Start: uvicorn server.app:app --host 0.0.0.0 --port 7860")
     except Exception as e:
         check("Server endpoints", False, str(e))
