@@ -83,23 +83,18 @@ except ImportError:
     except ImportError:
         SupplyChainEnvironment = None  # type: ignore[assignment,misc]
 
-__version__ = "4.0.0"
+__version__ = "4.2.0"
 
 __all__ = [
-    # Remote client
     "SupplyChainEnv",
-    # Core models
     "SupplyChainAction",
     "SupplyChainObservation",
     "SupplyChainState",
-    # RFC 004 rubric system
     "SupplyChainRubric",
     "ExactGoalRubric",
     "PartialCreditRubric",
     "ProcessRubric",
     "CustomMetricRubric",
-    # Local in-process environment
     "SupplyChainEnvironment",
-    # Version
     "__version__",
 ]

@@ -1,12 +1,11 @@
 spec_version: 1
 name: supply_chain_env
-version: "4.1.0"
+version: "4.2.0"
 type: space
 runtime: fastapi
 app: server.app:app
 port: 7860
 
-# Required by OpenEnv auto-discovery (AutoEnv / AutoAction)
 action_type: SupplyChainAction
 observation_type: SupplyChainObservation
 
@@ -102,8 +101,8 @@ reward_shaping:
       value: 1.00
       condition: all task objectives satisfied (_all_goals_met returns True)
     - name: step_efficiency_bonus
-      range: [0.0, 0.15]
-      condition: goals met in fewer than 20 steps — folded into 1.0 cap
+      range: [0.0, 0.10]
+      condition: goals met in fewer than 15 steps — folded into 1.0 cap
     - name: budget_efficiency_bonus
       range: [0.0, 0.10]
       condition: goals met with budget remaining — folded into 1.0 cap
@@ -147,6 +146,9 @@ endpoints:
   - path: /step
     method: POST
     description: Execute one tool action. Body is SupplyChainAction JSON.
+  - path: /state
+    method: GET
+    description: Get current episode state dict.
   - path: /health
     method: GET
     description: Liveness check.
