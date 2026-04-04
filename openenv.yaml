@@ -1,6 +1,6 @@
 spec_version: 1
 name: supply_chain_env
-version: "4.0.0"
+version: "4.1.0"
 type: space
 runtime: fastapi
 app: server.app:app
@@ -9,7 +9,6 @@ port: 7860
 # Required by OpenEnv auto-discovery (AutoEnv / AutoAction)
 action_type: SupplyChainAction
 observation_type: SupplyChainObservation
-state_type: SupplyChainState
 
 description: >
   Supply chain disruption environment for LLM agent training.
@@ -18,7 +17,7 @@ description: >
   adversarial competing buyers, and multi-product budget constraints.
   Features 6 task types, 10 fixed tasks, and an infinite procedural task pool
   (any integer task_id generates a unique reproducible episode).
-  Reward is layered (0.10 → 0.50 → 0.75 → 1.00 → 1.30) for dense RL training signals.
+  Reward is layered (0.05 → 0.50 → 0.75 → 1.00) for dense RL training signals.
 
 tags:
   - openenv
@@ -64,52 +63,54 @@ observation_space:
     state:
       type: object
       description: >
-        Full episode state. Always contains all 13 keys:
+        Full episode state. Always contains:
         task_id, task_type, difficulty, goal_description,
         inventory, steps, max_steps,
         orders_placed, shipments_rerouted, shipments_cancelled, pending_shipments,
-        spent_budget, remaining_budget.
-        competing_bids_countdown is additionally present on competing_buyer tasks.
+        spent_budget, remaining_budget (if task has budget).
+        competing_bids_countdown additionally present on competing_buyer tasks.
     reward:
       type: float
       description: >
-        Reward for this step. Range 0.0–1.30.
-        Layered: 0.10 (any action), 0.50 (order/reroute),
-        0.75 (key sub-task), 1.00 (all goals met),
-        up to +0.15 step efficiency bonus, up to +0.10 budget efficiency bonus.
+        Reward for this step. Range 0.0–1.0.
+        Layered: 0.05 (participation), up to 0.25 (diagnostics),
+        0.50 (order/reroute placed), 0.65–0.80 (sub-goals),
+        1.00 (all goals met, including step + budget efficiency bonuses capped at 1.0).
     done:
       type: boolean
       description: True when reward >= 1.0 or max_steps (25) reached.
 
 reward_shaping:
   description: >
-    Layered reward system with efficiency bonuses and spam penalty.
+    Layered reward system with efficiency bonuses and duplicate-call spam penalty.
   layers:
     - name: participation
-      range: [0.05, 0.15]
-      condition: any tool called
+      value: 0.05
+      condition: any tool called (step >= 1)
     - name: diagnostics
-      range: [0.05, 0.35]
-      condition: read-only tools used before acting
+      range: [0.05, 0.25]
+      condition: read-only tools used (get_inventory, check_supplier_status, etc.)
     - name: action_taken
       value: 0.50
-      condition: any order placed or shipment action
+      condition: any order placed, shipment rerouted, or shipment cancelled
     - name: sub_task
-      value: 0.75
-      condition: key sub-goal completed (reroute, cancel, quality check)
+      range: [0.65, 0.80]
+      condition: >
+        key sub-goal completed: reroute/cancel (0.75), quality-check-before-order (0.80),
+        competing-buyer order before deadline (0.80), order-only on medium (0.65)
     - name: goals_met
       value: 1.00
-      condition: all task objectives satisfied
+      condition: all task objectives satisfied (_all_goals_met returns True)
     - name: step_efficiency_bonus
       range: [0.0, 0.15]
-      condition: fewer steps used relative to max_steps
+      condition: goals met in fewer than 20 steps — folded into 1.0 cap
     - name: budget_efficiency_bonus
       range: [0.0, 0.10]
-      condition: hard tasks only — budget remaining after goal completion
+      condition: goals met with budget remaining — folded into 1.0 cap
   penalties:
     - name: spam_penalty
-      condition: same tool called more than 5 consecutive times
-      effect: reward reduced, floor at 0.0
+      condition: same tool called more than 2 times total in the episode
+      effect: -0.02 per excess call, floor at 0.0, only applied when score < 1.0
 
 tasks:
   fixed:
@@ -137,7 +138,7 @@ tasks:
       - {ids: "300+",    difficulty: hard,   type: cycles_all_hard_types}
 
 max_steps: 25
-reward_range: [0.0, 1.30]
+reward_range: [0.0, 1.0]
 
 endpoints:
   - path: /reset
@@ -146,9 +147,6 @@ endpoints:
   - path: /step
     method: POST
     description: Execute one tool action. Body is SupplyChainAction JSON.
-  - path: /state
-    method: GET
-    description: Get current episode state (all 13 fields).
   - path: /health
     method: GET
     description: Liveness check.
@@ -157,7 +155,7 @@ endpoints:
     description: Persistent WebSocket session for low-latency multi-step interaction.
   - path: /web
     method: GET
-    description: Interactive Gradio-style demo UI.
+    description: Gradio demo UI (served by openenv-core create_app).
   - path: /docs
     method: GET
     description: Auto-generated OpenAPI documentation.
