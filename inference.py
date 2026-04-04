@@ -14,14 +14,15 @@ Runs 10 tasks across easy / medium / hard / price_negotiation /
 quality_control / competing_buyer and saves results.json.
 
 JUDGE LOG FORMAT — stdout emits exactly:
-  [START] task_id=<n>
-  [STEP] step=<n> action=<json> observation=<json_str> reward=<float> done=<bool>
-  [END] task_id=<n> total_reward=<float>
+  [START] task=<task_name> env=<benchmark> model=<model_name>
+  [STEP]  step=<n> action=<action_str> reward=<0.00> done=<true|false> error=<msg|null>
+  [END]   success=<true|false> steps=<n> score=<0.000> rewards=<r1,r2,...,rn>
 """
 
 import json
 import os
 import time
+from typing import List, Optional
 
 import requests
 from openai import OpenAI
@@ -33,6 +34,7 @@ API_BASE_URL = os.environ.get("API_BASE_URL", "https://router.huggingface.co/v1"
 MODEL_NAME   = os.environ.get("MODEL_NAME",   "Qwen/Qwen2.5-7B-Instruct")
 HF_TOKEN     = os.environ.get("HF_TOKEN",     "")
 ENV_BASE_URL = os.environ.get("ENV_BASE_URL", "http://localhost:7860")
+BENCHMARK    = "supply_chain_env"
 
 MAX_STEPS = 25
 
@@ -40,13 +42,6 @@ client = OpenAI(api_key=HF_TOKEN or "dummy", base_url=API_BASE_URL)
 
 # ---------------------------------------------------------------------------
 # System prompt — v4
-# Improvements over v3:
-#   1. Explicit decision tree (not prose bullets) — same sequence every episode
-#   2. Task type detection from keywords in the observation text
-#   3. Full argument schemas with ALL supplier/product name patterns
-#   4. Failure recovery rules — what to do when a tool returns an error
-#   5. Reward-signal awareness — explains WHY to read before acting
-#   6. Hard constraint reminders — failed/strike suppliers, budget, quality
 # ---------------------------------------------------------------------------
 SYSTEM_PROMPT = """You are a supply chain manager AI. Respond with ONLY a single JSON object — no markdown, no explanation, no text before or after.
 
@@ -99,7 +94,7 @@ DECISION TREE — follow in order every episode
 ═══════════════════════════════════════════════
 
 STEP 1 — DETECT TASK TYPE from the observation text:
-  • Contains "price" or "budget" or "cheapest"  → price_negotiation task
+  • Contains "price" or "budget" or "cheapest"    → price_negotiation task
   • Contains "defect" or "quality" or "compliant" → quality_control task
   • Contains "competitor" or "competing" or "rival" → competing_buyer task
   • Contains "FAILED" or "failed" or "strike"     → reroute/multi-crisis task
@@ -151,12 +146,12 @@ STEP 3 — ACT:
 
 STEP 4 — FAILURE RECOVERY (if a tool returns an error):
 
-  "supplier is failed/strike"  → switch to a different supplier immediately
+  "supplier is failed/strike"     → switch to a different supplier immediately
   "defect rate exceeds threshold" → call get_quality_report, pick a PASS supplier
   "cost exceeds remaining budget" → pick a cheaper supplier or reduce quantity
-  "Shipment not found"         → call get_pending_shipments to get correct IDs
-  "product not in catalogue"   → call get_inventory to get exact product names
-  "quantity must be > 0"       → retry with quantity ≥ 1
+  "Shipment not found"            → call get_pending_shipments to get correct IDs
+  "product not in catalogue"      → call get_inventory to get exact product names
+  "quantity must be > 0"          → retry with quantity ≥ 1
 
 ═══════════════════════════════════════════════
 HARD RULES — never violate these
@@ -186,12 +181,37 @@ TASKS = [0, 1, 2, 5, 6, 7, 10, 11, 12, 13]
 
 
 # ---------------------------------------------------------------------------
+# Structured log helpers — MUST match official sample format exactly
+# ---------------------------------------------------------------------------
+
+def log_start(task: str, env: str, model: str) -> None:
+    print(f"[START] task={task} env={env} model={model}", flush=True)
+
+
+def log_step(step: int, action: str, reward: float, done: bool, error: Optional[str]) -> None:
+    error_val = error if error else "null"
+    done_val  = str(done).lower()          # must be lowercase: true / false
+    print(
+        f"[STEP] step={step} action={action} reward={reward:.2f} done={done_val} error={error_val}",
+        flush=True,
+    )
+
+
+def log_end(success: bool, steps: int, score: float, rewards: List[float]) -> None:
+    rewards_str = ",".join(f"{r:.2f}" for r in rewards)
+    print(
+        f"[END] success={str(success).lower()} steps={steps} score={score:.3f} rewards={rewards_str}",
+        flush=True,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 def parse_action(raw: str) -> dict:
     """Parse LLM output to a tool call dict. Falls back to get_inventory."""
     raw = raw.strip()
-    # Strip markdown fences if present
     if raw.startswith("```"):
         lines = raw.split("\n")
         raw = "\n".join(lines[1:-1]) if len(lines) > 2 else raw
@@ -201,7 +221,6 @@ def parse_action(raw: str) -> dict:
             return obj
     except json.JSONDecodeError:
         pass
-    # Try to extract JSON substring
     start = raw.find("{")
     end   = raw.rfind("}") + 1
     if start != -1 and end > start:
@@ -215,7 +234,6 @@ def parse_action(raw: str) -> dict:
 
 
 def safe_obs_text(result: dict) -> str:
-    """Extract observation text from a step result."""
     obs = result.get("observation", result)
     if isinstance(obs, dict):
         return obs.get("text", json.dumps(obs))
@@ -223,41 +241,25 @@ def safe_obs_text(result: dict) -> str:
 
 
 def build_user_message(obs_text: str, state: dict, step: int) -> str:
-    """
-    Build a rich user message that includes:
-      - the raw observation text
-      - key state fields the LLM should reason over
-      - a reminder of what step it's on and how many remain
-
-    This replaces bare obs_text so the model always knows its context.
-    """
     parts = [obs_text]
-
-    # Inject state hints the model should see
     if state:
         hints = []
-
         remaining = state.get("remaining_budget")
         if remaining is not None:
             hints.append(f"remaining_budget=${remaining:.2f}")
-
         countdown = state.get("competing_bids_countdown", {})
         if countdown:
             for prod, steps_left in countdown.items():
                 urgency = "CRITICAL" if steps_left <= 2 else "URGENT" if steps_left <= 4 else "ACT SOON"
                 hints.append(f"competitor_deadline[{prod}]={steps_left}_steps ({urgency})")
-
         orders = state.get("orders_placed", [])
         if orders:
             hints.append(f"orders_placed={len(orders)}")
-
         reroutes = state.get("shipments_rerouted", [])
         if reroutes:
             hints.append(f"shipments_rerouted={len(reroutes)}")
-
         if hints:
             parts.append("\n[STATE] " + " | ".join(hints))
-
     parts.append(f"\n[STEP {step}/{MAX_STEPS}] What is your next action?")
     return "\n".join(parts)
 
@@ -265,105 +267,116 @@ def build_user_message(obs_text: str, state: dict, step: int) -> str:
 # ---------------------------------------------------------------------------
 # Single episode
 # ---------------------------------------------------------------------------
+
 def run_episode(task_id: int) -> float:
     """
-    Run one full episode. Emits judge-required stdout log lines:
-      [START] task_id=<n>
-      [STEP]  step=<n> action=<json> observation=<json_str> reward=<float> done=<bool>
-      [END]   task_id=<n> total_reward=<float>
+    Run one full episode. Emits the three required judge log line types.
     Returns the best reward achieved in the episode.
     """
-    # --- Reset environment ---
-    resp = requests.post(
-        f"{ENV_BASE_URL}/reset",
-        params={"task_id": task_id, "seed": 42},
-        timeout=15,
-    )
-    resp.raise_for_status()
-    data     = resp.json()
-    obs_data = data.get("observation", data)
-    obs_text = obs_data.get("text", str(obs_data)) if isinstance(obs_data, dict) else str(obs_data)
-    state    = obs_data.get("state", {}) if isinstance(obs_data, dict) else {}
+    task_name = f"task_{task_id}"
+    rewards: List[float] = []
+    steps_taken = 0
+    score   = 0.0
+    success = False
 
-    # ── JUDGE LOG: START ──────────────────────────────────────────────────
-    print(f"[START] task_id={task_id}", flush=True)
+    # Emit [START] — one per episode, at the very top
+    log_start(task=task_name, env=BENCHMARK, model=MODEL_NAME)
 
-    messages = [
-        {"role": "system",  "content": SYSTEM_PROMPT},
-        {"role": "user",    "content": build_user_message(obs_text, state, step=0)},
-    ]
-
-    best_reward = 0.0
-    done        = False
-
-    for step in range(1, MAX_STEPS + 1):
-        # --- LLM decides action ---
-        try:
-            raw = client.chat.completions.create(
-                model=MODEL_NAME,
-                messages=messages,
-                max_tokens=200,
-                temperature=0.0,
-            ).choices[0].message.content.strip()
-            action = parse_action(raw)
-        except Exception:
-            action = {"tool": "get_inventory", "args": {}}
-            raw    = json.dumps(action)
-
-        # --- Step the environment ---
-        try:
-            result = requests.post(
-                f"{ENV_BASE_URL}/step",
-                json=action,
-                timeout=15,
-            ).json()
-        except Exception as e:
-            print(f"[ERROR] task_id={task_id} step={step} error={str(e)}", flush=True)
-            break
-
-        obs_text    = safe_obs_text(result)
-        reward      = float(result.get("reward", 0.0))
-        done        = bool(result.get("done", False))
-        state       = result.get("state", {})
-        best_reward = max(best_reward, reward)
-
-        # ── JUDGE LOG: STEP ───────────────────────────────────────────────
-        print(
-            f"[STEP] step={step} "
-            f"action={json.dumps(action)} "
-            f"observation={json.dumps(obs_text)} "
-            f"reward={reward:.4f} "
-            f"done={done}",
-            flush=True,
+    try:
+        # --- Reset environment ---
+        resp = requests.post(
+            f"{ENV_BASE_URL}/reset",
+            params={"task_id": task_id, "seed": 42},
+            timeout=15,
         )
+        resp.raise_for_status()
+        data     = resp.json()
+        obs_data = data.get("observation", data)
+        obs_text = obs_data.get("text", str(obs_data)) if isinstance(obs_data, dict) else str(obs_data)
+        state    = obs_data.get("state", {}) if isinstance(obs_data, dict) else {}
 
-        messages.append({"role": "assistant", "content": raw})
-        if not done:
-            # Pass enriched context back to the model on every turn
-            messages.append({
-                "role": "user",
-                "content": build_user_message(obs_text, state, step=step),
-            })
+        messages = [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user",   "content": build_user_message(obs_text, state, step=0)},
+        ]
 
-        if done:
-            break
+        done = False
 
-        time.sleep(0.05)  # be polite to the API
+        for step in range(1, MAX_STEPS + 1):
+            error_msg = None
 
-    # ── JUDGE LOG: END ────────────────────────────────────────────────────
-    print(f"[END] task_id={task_id} total_reward={best_reward:.4f}", flush=True)
-    return best_reward
+            # --- LLM decides action ---
+            try:
+                raw = client.chat.completions.create(
+                    model=MODEL_NAME,
+                    messages=messages,
+                    max_tokens=200,
+                    temperature=0.0,
+                ).choices[0].message.content.strip()
+                action = parse_action(raw)
+            except Exception as e:
+                error_msg = str(e)[:80]
+                action = {"tool": "get_inventory", "args": {}}
+                raw    = json.dumps(action)
+
+            # action_str for the log: just the tool name keeps it readable and single-line
+            action_str = action.get("tool", "unknown")
+
+            # --- Step the environment ---
+            try:
+                result = requests.post(
+                    f"{ENV_BASE_URL}/step",
+                    json=action,
+                    timeout=15,
+                ).json()
+            except Exception as e:
+                # Emit a STEP line so the grader parser never stalls
+                log_step(step=step, action=action_str, reward=0.0, done=True, error=str(e)[:80])
+                break
+
+            obs_text = safe_obs_text(result)
+            reward   = float(result.get("reward", 0.0))
+            done     = bool(result.get("done", False))
+            state    = result.get("state", {})
+
+            rewards.append(reward)
+            steps_taken = step
+
+            # Emit [STEP] — one per step, immediately after env.step() returns
+            log_step(step=step, action=action_str, reward=reward, done=done, error=error_msg)
+
+            messages.append({"role": "assistant", "content": raw})
+            if not done:
+                messages.append({
+                    "role": "user",
+                    "content": build_user_message(obs_text, state, step=step),
+                })
+
+            if done:
+                break
+
+            time.sleep(0.05)
+
+        # Compute score: best single-step reward reached (reflects grader logic)
+        score   = max(rewards) if rewards else 0.0
+        success = score >= 1.0
+
+    finally:
+        # Emit [END] — always, even on exception
+        log_end(success=success, steps=steps_taken, score=score, rewards=rewards)
+
+    return score
 
 
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
+
 def main():
     print("Supply Chain Environment — Baseline Inference v4", flush=True)
     print(f"Model      : {MODEL_NAME}", flush=True)
     print(f"Environment: {ENV_BASE_URL}", flush=True)
 
-    # Health check
     try:
         requests.get(f"{ENV_BASE_URL}/health", timeout=5).raise_for_status()
         print("Environment: REACHABLE\n", flush=True)
@@ -380,7 +393,7 @@ def main():
             scores[tid] = run_episode(tid)
         except Exception as e:
             # Still emit [END] so the judge parser never stalls on a missing line
-            print(f"[END] task_id={tid} total_reward=0.0000", flush=True)
+            print(f"[END] success=false steps=0 score=0.000 rewards=", flush=True)
             scores[tid] = 0.0
 
         # 18-minute safety cutoff (hard limit is 20 min)
@@ -393,8 +406,8 @@ def main():
     # ---------------------------------------------------------------------------
     avg    = sum(scores.values()) / len(scores) if scores else 0.0
     by_diff = {
-        "easy":   [scores[t] for t in [0, 6]         if t in scores],
-        "medium": [scores[t] for t in [1, 5, 7, 12]  if t in scores],
+        "easy":   [scores[t] for t in [0, 6]          if t in scores],
+        "medium": [scores[t] for t in [1, 5, 7, 12]   if t in scores],
         "hard":   [scores[t] for t in [2, 10, 11, 13] if t in scores],
     }
 
@@ -412,7 +425,6 @@ def main():
     print(f"  Runtime : {time.time()-start_time:.1f}s", flush=True)
     print(f"{'='*50}", flush=True)
 
-    # Save results.json
     out = {
         "model":   MODEL_NAME,
         "env_url": ENV_BASE_URL,
