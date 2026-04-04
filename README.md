@@ -48,7 +48,7 @@ Most RL environments for LLMs are either too simple (toy grids, word games) or t
 | Dockerfile builds | ✅ |
 | `inference.py` produces `[START]`/`[STEP]`/`[END]` logs | ✅ |
 | 3+ tasks with graders, scores in 0.0–1.30 | ✅ (10 fixed + infinite procedural) |
-| `python validate.py` → 118/118 checks pass | ✅ |
+| `python validate.py` → 103/103 checks pass | ✅ |
 
 ---
 
@@ -326,8 +326,7 @@ python inference.py
 ```bash
 python validate.py
 # Expected output:
-# 118/118 checks across 14 sections
-# STATUS: READY TO SUBMIT ✓
+# Result: 103/103 checks passed — STATUS: READY TO SUBMIT ✓
 ```
 
 ---
@@ -346,7 +345,7 @@ openenv-supply-chain/
 ├── models.py                           # Pydantic typed models (Action, Observation, State)
 ├── client.py                           # Python client for training code
 ├── inference.py                        # Baseline LLM agent — emits [START]/[STEP]/[END] logs
-├── validate.py                         # Pre-submission validator (118 checks)
+├── validate.py                         # Pre-submission validator (103 checks)
 ├── openenv.yaml                        # OpenEnv spec config
 ├── Dockerfile                          # Container definition
 └── pyproject.toml                      # Package config
@@ -379,7 +378,7 @@ openenv-supply-chain/
 - Corrected task ID mapping in validator (sections 8–11).
 - Procedural task generator: any integer task ID now produces a valid deterministic task.
 - Added `_tool_call_log`, spam penalty, step efficiency bonus, and budget efficiency bonus.
-- Validator expanded to 118 checks across 14 sections.
+- Validator expanded to 103 checks across 14 sections.
 - Reward upper bound raised to 1.30 to accommodate stacked bonuses.
 - State dict standardised to 13 fields; `goal_description` and `task_type` added.
 - `inference.py` updated to emit exact `[START]`/`[STEP]`/`[END]` judge log format.
