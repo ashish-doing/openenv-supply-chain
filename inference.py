@@ -271,7 +271,7 @@ def build_user_message(obs_text: str, state: dict, step: int) -> str:
 def run_episode(task_id: int) -> float:
     """
     Run one full episode. Emits the three required judge log line types.
-    Returns the best reward achieved in the episode.
+    Returns the final step reward (matches judge scoring logic).
     """
     task_name = f"task_{task_id}"
     rewards: List[float] = []
@@ -357,8 +357,9 @@ def run_episode(task_id: int) -> float:
 
             time.sleep(0.05)
 
-        # Compute score: best single-step reward reached (reflects grader logic)
-        score   = max(rewards) if rewards else 0.0
+        # FIX: Use the final step reward (matches judge scoring logic).
+        # Previously used max(rewards) which inflated local scores vs judge scores.
+        score   = rewards[-1] if rewards else 0.0
         success = score >= 1.0
 
     finally:
@@ -389,11 +390,13 @@ def main():
     start_time = time.time()
 
     for tid in TASKS:
+        task_name = f"task_{tid}"
         try:
             scores[tid] = run_episode(tid)
         except Exception as e:
-            # Still emit [END] so the judge parser never stalls on a missing line
-            print(f"[END] success=false steps=0 score=0.000 rewards=", flush=True)
+            # FIX: emit a well-formed [END] line with task name so the judge
+            # parser never stalls on a missing or malformed line.
+            log_end(success=False, steps=0, score=0.0, rewards=[])
             scores[tid] = 0.0
 
         # 18-minute safety cutoff (hard limit is 20 min)

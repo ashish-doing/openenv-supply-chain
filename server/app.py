@@ -180,26 +180,18 @@ async def root():
     description="Start a new episode. Use task_id 0-2 for easy, 5-6 for medium, 10-11 for hard."
 )
 async def quick_reset(body: ResetRequest = Body(...)):
-    try:
-        import httpx
-        async with httpx.AsyncClient() as client:
-            r = await client.post(
-                "http://localhost:7860/reset",
-                params={"task_id": body.task_id, "seed": body.seed},
-                timeout=10
-            )
-            return r.json()
-    except Exception:
-        env = SupplyChainEnvironment()
-        obs = env.reset(task_id=body.task_id, seed=body.seed)
-        return {
-            "observation": {
-                "text": obs.text,
-                "state": obs.state,
-                "reward": obs.reward,
-                "done": obs.done
-            }
+    # FIX: Previously made an internal HTTP call to localhost:7860 which
+    # deadlocks (the server calling itself). Now directly instantiates env.
+    env = SupplyChainEnvironment()
+    obs = env.reset(task_id=body.task_id, seed=body.seed)
+    return {
+        "observation": {
+            "text":   obs.text,
+            "state":  obs.state,
+            "reward": obs.reward,
+            "done":   obs.done,
         }
+    }
 
 
 @app.post(
@@ -215,11 +207,11 @@ async def quick_step(body: StepRequest = Body(...)):
     result = env.step(action)
     return {
         "observation": {
-            "text": result.text,
+            "text":  result.text,
             "state": result.state,
         },
         "reward": result.reward,
-        "done": result.done,
+        "done":   result.done,
         "hint": "reward=1.0 means task complete! Try the full /reset + /step sequence for stateful play."
     }
 
@@ -250,22 +242,22 @@ async def quick_demo():
     for i, action in enumerate(actions):
         result = env.step(action)
         steps.append({
-            "step": i + 1,
-            "tool": action.tool,
-            "args": action.args,
+            "step":     i + 1,
+            "tool":     action.tool,
+            "args":     action.args,
             "response": result.text[:100],
-            "reward": result.reward,
-            "done": result.done
+            "reward":   result.reward,
+            "done":     result.done,
         })
         if result.done:
             break
 
     return {
-        "task": "Easy Task 0: Reorder bottled water",
-        "result": "SUCCESS" if steps[-1]["reward"] >= 1.0 else "INCOMPLETE",
+        "task":         "Easy Task 0: Reorder bottled water",
+        "result":       "SUCCESS" if steps[-1]["reward"] >= 1.0 else "INCOMPLETE",
         "final_reward": steps[-1]["reward"],
-        "episode": steps,
-        "message": "This is what an AI agent experiences each step. Reward 1.0 means task solved!"
+        "episode":      steps,
+        "message":      "This is what an AI agent experiences each step. Reward 1.0 means task solved!"
     }
 
 
