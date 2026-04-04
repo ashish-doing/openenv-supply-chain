@@ -350,7 +350,7 @@ def run_episode(task_id: int) -> float:
                 action = {"tool": "get_inventory", "args": {}}
                 raw    = json.dumps(action)
 
-            action_str = action.get("tool", "unknown")
+            action_str = json.dumps(action, separators=(',', ':'))
 
             try:
                 result = requests.post(
