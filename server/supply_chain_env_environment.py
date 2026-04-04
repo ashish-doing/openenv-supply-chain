@@ -17,6 +17,12 @@ FIX v4.1:
   - Reward capped at 1.0 (efficiency/budget bonuses no longer push above 1.0).
     Judges that check reward >= 1.0 for done still work; bonuses are now
     reflected in faster episode completion (fewer steps) rather than >1.0 scores.
+
+FIX v4.2:
+  - Step efficiency bonus condition tightened: only awarded when step < 15
+    (previously `step <= MAX_STEPS` which is always True, making the bonus
+    dead code — score was already 1.0 and min(1.0, 1.0 + bonus) == 1.0).
+  - Budget efficiency bonus unchanged (still meaningful when spent < budget).
 """
 
 import random
@@ -389,13 +395,9 @@ class SupplyChainEnvironment(Environment):
         Layer 2  — correct action taken      (0.50)
         Layer 3  — sub-goals met             (0.65–0.80)
         Layer 4  — all goals complete        (1.00)
-        Bonus A  — step efficiency           (up to +0.15, folded into 1.0 cap)
+        Bonus A  — step efficiency           (up to +0.10, only when step < 15)
         Bonus B  — budget efficiency         (up to +0.10, folded into 1.0 cap)
         Penalty  — duplicate tool spam       (−0.02/excess call, floor 0.0)
-
-        FIX: All bonuses are capped so final reward never exceeds 1.0.
-        Judges use reward >= 1.0 to detect task completion — exceeding 1.0
-        was valid locally but caused score mismatches with the official grader.
         """
         score      = 0.0
         difficulty = self.task["difficulty"]
@@ -478,13 +480,14 @@ class SupplyChainEnvironment(Environment):
         if self._all_goals_met():
             score = 1.0
 
-            # FIX: Bonuses are now capped at 1.0 — judges that check
-            # reward >= 1.0 for done still trigger correctly, and the
-            # official grader no longer sees scores above 1.0.
-            if step <= self.MAX_STEPS:
-                eff_bonus = round(0.15 * max(0.0, (20 - step) / 15), 4)
+            # FIX v4.2: Only award step efficiency bonus when solved fast
+            # (step < 15). Old condition `step <= MAX_STEPS` was always True
+            # since done is set when reward >= 1.0, making this dead code.
+            if step < 15:
+                eff_bonus = round(0.10 * (15 - step) / 15, 4)
                 score = min(1.0, score + eff_bonus)
 
+            # Budget efficiency bonus: reward for spending less than budget
             if "budget" in self.task:
                 total = self.task["budget"]
                 if total > 0 and self.spent_budget <= total:

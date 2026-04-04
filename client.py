@@ -14,7 +14,7 @@ Usage (async):
             tool="place_order",
             args={"supplier_name": "SupplierA", "product": "bottled_water", "quantity": 200}
         ))
-        print(obs.reward)   # 1.15
+        print(obs.reward)   # 1.0
 
 Usage (sync):
     from supply_chain_env import SupplyChainEnv, SupplyChainAction
@@ -155,7 +155,11 @@ class SupplyChainEnv:
 
     async def state(self) -> SupplyChainState:
         """Fetch the current episode state (all 13 fields)."""
-        r = requests.get(f"{self.base_url}/state", timeout=10)
+        loop = asyncio.get_event_loop()
+        r = await loop.run_in_executor(
+            None,
+            lambda: requests.get(f"{self.base_url}/state", timeout=10)
+        )
         r.raise_for_status()
         return SupplyChainState(**r.json())
 

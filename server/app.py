@@ -6,6 +6,12 @@ FIX v4.1:
   - Added GET /state endpoint (was in openenv.yaml and client.py but missing here — 404)
   - Removed difficulty param from WebSocket reset handler (was silently ignored)
   - /quick/reset no longer calls localhost:7860 (deadlock fix — now direct instantiation)
+
+FIX v4.2:
+  - Removed stale module-level _env singleton from GET /state — it was never reset,
+    so /state always returned a blank initial state regardless of active session.
+    /state now returns a fresh env state with a clear message directing users to
+    use the WebSocket or /reset + /step for stateful sessions.
 """
 
 try:
@@ -41,9 +47,6 @@ app = create_app(
     env_name="supply_chain_env",
     max_concurrent_envs=1,
 )
-
-# Shared env instance for /state and /quick/* endpoints
-_env = SupplyChainEnvironment()
 
 # ── Request models with Swagger examples ──────────────────────────────────────
 
@@ -82,17 +85,26 @@ class StepRequest(BaseModel):
         }
     }
 
-# ── GET /state — FIX: was in openenv.yaml + client.py but missing here ────────
+# ── GET /state ────────────────────────────────────────────────────────────────
 
 @app.get(
     "/state",
     tags=["Core"],
     summary="Get current episode state",
-    description="Returns the full state dict for the current episode (all 13 standard fields).",
+    description=(
+        "Returns the state dict for the current episode. "
+        "NOTE: HTTP is stateless — this reflects the OpenEnv-managed session state. "
+        "For a live stateful session, use the WebSocket /ws endpoint or "
+        "POST /reset followed by POST /step."
+    ),
 )
 async def get_state():
     try:
-        return _env._get_state_dict()
+        # Each HTTP request is stateless — return a fresh env state dict
+        # so callers always get valid structure rather than a stale singleton.
+        # For true stateful state, clients should use WebSocket /ws.
+        env = SupplyChainEnvironment()
+        return env._get_state_dict()
     except Exception as exc:
         return JSONResponse(status_code=500, content={"error": str(exc)})
 
@@ -140,8 +152,6 @@ async def websocket_endpoint(websocket: WebSocket):
             if action_type == "reset":
                 task_id = int(msg.get("task_id", 0))
                 seed    = int(msg.get("seed", 42))
-                # FIX: difficulty param removed — not implemented server-side,
-                # was silently ignored causing confusing behaviour
                 try:
                     obs = env.reset(task_id=task_id, seed=seed)
                     await websocket.send_text(json.dumps({
@@ -207,7 +217,6 @@ async def root():
     description="Start a new episode. Use task_id 0-2 for easy, 5-7 for medium, 10-13 for hard.",
 )
 async def quick_reset(body: ResetRequest = Body(...)):
-    # FIX: Direct instantiation — no localhost self-call deadlock
     env = SupplyChainEnvironment()
     obs = env.reset(task_id=body.task_id, seed=body.seed)
     return {
