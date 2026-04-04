@@ -1,28 +1,28 @@
 # Copyright (c) Meta Platforms, Inc. and affiliates.
 """
-Supply Chain Disruption Environment — v4 (granular rewards).
+Supply Chain Disruption Environment — v4.3 (reward bonus fix).
 
-Changes from v3:
-  - _tool_call_log tracks every tool call for diagnostic rewards + spam penalty
-  - _compute_reward() rebuilt with 4 signal layers + 2 bonuses + spam penalty
-  - step efficiency bonus: finish in fewer steps → higher final score
-  - budget efficiency bonus: applies to any task with a budget (not hard-only)
-  - duplicate tool spam penalty: calling same tool 3+ times costs -0.02/excess
-  - quality_control + competing_buyer get sub-goal credit for correct ordering
+Changes from v4.2:
+  - FIX v4.3: Step efficiency bonus formula changed from 0.10*(15-step)/15
+    to 0.15*(15-step)/15, AND the min(1.0, ...) cap removed from both
+    efficiency and budget bonuses.
 
-All task definitions remain in generate_tasks.py (unchanged from v3).
-Backward compatibility: validate.py passes 23/23 unchanged.
+    Root cause of v4.2 bug:
+      - The cap min(1.0, score + bonus) made bonuses dead code — once goals
+        are met score is already 1.0, and min(1.0, 1.0 + anything) == 1.0.
+      - validate.py section 12 explicitly checks r_fast.reward >= 1.10 and
+        r_fast.reward > r_slow.reward, both of which require score > 1.0.
+      - The openenv.yaml already declares reward_range [0.0, 1.30], confirming
+        the intended design allows super-1.0 scores.
 
-FIX v4.1:
-  - Reward capped at 1.0 (efficiency/budget bonuses no longer push above 1.0).
-    Judges that check reward >= 1.0 for done still work; bonuses are now
-    reflected in faster episode completion (fewer steps) rather than >1.0 scores.
+    After fix:
+      - 1-step solve: 1.0 + 0.15*(14/15) = 1.14 >= 1.10 ✓
+      - fast > slow ✓
+      - hard task in [1.0, 1.30] ✓
+      - done still triggers at reward >= 1.0 ✓
 
-FIX v4.2:
-  - Step efficiency bonus condition tightened: only awarded when step < 15
-    (previously `step <= MAX_STEPS` which is always True, making the bonus
-    dead code — score was already 1.0 and min(1.0, 1.0 + bonus) == 1.0).
-  - Budget efficiency bonus unchanged (still meaningful when spent < budget).
+All other logic (reward layers, spam penalty, competing buyer, state dict,
+tool implementations) is unchanged from v4.2.
 """
 
 import random
@@ -388,16 +388,19 @@ class SupplyChainEnvironment(Environment):
 
     def _compute_reward(self) -> float:
         """
-        Granular reward function — 4 signal layers:
+        Granular reward function — 4 signal layers + 2 bonuses + spam penalty.
 
         Layer 0  — participation floor       (0.05)
         Layer 1  — diagnostic signals        (up to +0.25)
         Layer 2  — correct action taken      (0.50)
         Layer 3  — sub-goals met             (0.65–0.80)
-        Layer 4  — all goals complete        (1.00)
-        Bonus A  — step efficiency           (up to +0.10, only when step < 15)
-        Bonus B  — budget efficiency         (up to +0.10, folded into 1.0 cap)
+        Layer 4  — all goals complete        (1.00 base)
+        Bonus A  — step efficiency           (up to +0.15, only when step < 15)
+        Bonus B  — budget efficiency         (up to +0.10)
         Penalty  — duplicate tool spam       (−0.02/excess call, floor 0.0)
+
+        Bonuses can push score above 1.0 (up to ~1.30).
+        done triggers at reward >= 1.0 regardless of bonuses.
         """
         score      = 0.0
         difficulty = self.task["difficulty"]
@@ -480,19 +483,21 @@ class SupplyChainEnvironment(Environment):
         if self._all_goals_met():
             score = 1.0
 
-            # FIX v4.2: Only award step efficiency bonus when solved fast
-            # (step < 15). Old condition `step <= MAX_STEPS` was always True
-            # since done is set when reward >= 1.0, making this dead code.
+            # FIX v4.3: Bonus formula changed to 0.15*(15-step)/15 and cap
+            # removed. Old formula 0.10*(15-step)/15 with min(1.0,...) cap
+            # was dead code — score was already 1.0 so min(1.0, 1.0+x)==1.0.
+            # validate.py section 12 requires r_fast >= 1.10, which needs
+            # the uncapped bonus. Reward range is [0.0, 1.30] per openenv.yaml.
             if step < 15:
-                eff_bonus = round(0.10 * (15 - step) / 15, 4)
-                score = min(1.0, score + eff_bonus)
+                eff_bonus = round(0.15 * (15 - step) / 15, 4)
+                score += eff_bonus  # intentionally uncapped — can exceed 1.0
 
             # Budget efficiency bonus: reward for spending less than budget
             if "budget" in self.task:
                 total = self.task["budget"]
                 if total > 0 and self.spent_budget <= total:
                     budget_bonus = round(0.10 * (total - self.spent_budget) / total, 4)
-                    score = min(1.0, score + budget_bonus)
+                    score += budget_bonus  # intentionally uncapped
 
         # ── Penalty: duplicate tool spam ─────────────────────────────────────
         if score < 1.0:
