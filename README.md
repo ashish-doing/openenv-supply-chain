@@ -69,7 +69,7 @@ The agent must reason across multiple steps: diagnose the situation with read-on
 
 | Score | Condition |
 |-------|-----------|
-| 0.10 | Agent took at least one action |
+| 0.05 | Agent took at least one action |
 | 0.50 | Agent placed any order |
 | 1.00 | Correct supplier + correct product + correct quantity |
 
@@ -82,7 +82,7 @@ The agent must reason across multiple steps: diagnose the situation with read-on
 
 | Score | Condition |
 |-------|-----------|
-| 0.10 | Agent took at least one action |
+| 0.05 | Agent took at least one action |
 | 0.50 | Agent placed any order or rerouted any shipment |
 | 0.75 | Correct shipment rerouted to healthy supplier |
 | 1.00 | Reroute done AND correct emergency order placed |
@@ -96,7 +96,7 @@ The agent must reason across multiple steps: diagnose the situation with read-on
 
 | Score | Condition |
 |-------|-----------|
-| 0.10 | Agent took at least one action |
+| 0.05 | Agent took at least one action |
 | 0.50 | Agent placed any order |
 | 1.00 | Correct supplier (cheapest healthy), correct product, quantity ≥ goal, within budget |
 
@@ -109,7 +109,7 @@ The agent must reason across multiple steps: diagnose the situation with read-on
 
 | Score | Condition |
 |-------|-----------|
-| 0.10 | Agent took at least one action |
+| 0.05 | Agent took at least one action |
 | 0.50 | Agent placed any order or rerouted any shipment |
 | 0.75 | Required reroute completed |
 | 1.00+ | All product orders placed with correct suppliers within budget + efficiency bonus |
@@ -123,7 +123,7 @@ The agent must reason across multiple steps: diagnose the situation with read-on
 
 | Score | Condition |
 |-------|-----------|
-| 0.10 | Agent took at least one action |
+| 0.05 | Agent took at least one action |
 | 0.50 | Agent placed any order or cancelled shipment |
 | 0.75 | Stuck shipment cancelled |
 | 1.00+ | All orders placed with the available domestic supplier within budget + efficiency bonus |
@@ -137,7 +137,7 @@ The agent must reason across multiple steps: diagnose the situation with read-on
 
 | Score | Condition |
 |-------|-----------|
-| 0.10 | Agent took at least one action |
+| 0.05 | Agent took at least one action |
 | 0.50 | Agent placed any order or cancelled shipment |
 | 0.75 | Defective shipment cancelled |
 | 1.00+ | All orders placed with quality-compliant suppliers + efficiency bonus |
@@ -153,7 +153,7 @@ The agent must reason across multiple steps: diagnose the situation with read-on
 
 | Score | Condition |
 |-------|-----------|
-| 0.10 | Agent took at least one action |
+| 0.05 | Agent took at least one action |
 | 0.50 | Agent placed any order |
 | 0.75 | Primary product secured before competitor locked capacity |
 | 1.00+ | Both products ordered + efficiency bonus |
@@ -168,16 +168,16 @@ Rewards are layered. Partial credit on every step makes this environment suitabl
 
 | Layer | Range | Condition |
 |-------|-------|-----------|
-| Participation | 0.10 | Any action taken |
+| Participation | 0.05 | Any action taken |
 | Sub-task credit | 0.50–0.75 | Partial goals met (reroute, cancel, any order) |
 | All goals met | 1.00 | All task objectives satisfied |
 | Step efficiency bonus | +0.00–0.15 | Fewer steps = higher bonus |
 | Budget efficiency bonus | +0.00–0.10 | Budget remaining on hard tasks |
 | **Maximum** | **≤ 1.30** | Goals + max step bonus + max budget bonus |
 
-**Spam penalty:** Calling the same tool more than 5 consecutive times applies a reward penalty. At 8 identical consecutive calls reward drops below 0.20. This discourages degenerate exploration strategies and forces the agent to actually reason between tool calls.
+**Spam penalty:** Calling the same tool more than 2 times total applies a reward penalty of −0.02 per excess call, floor at 0.0. This discourages degenerate exploration strategies and forces the agent to actually reason between tool calls.
 
-**Why this matters for RL training:** The layered reward avoids the sparse reward problem. An agent that does nothing scores 0.0. An agent that takes any action scores at least 0.10. An agent that makes progress on sub-tasks scores 0.50–0.75. Only an agent that reasons correctly about the full situation reaches 1.0+. This gradient is what GRPO needs to learn.
+**Why this matters for RL training:** The layered reward avoids the sparse reward problem. An agent that does nothing scores 0.0. An agent that takes any action scores at least 0.05. An agent that makes progress on sub-tasks scores 0.50–0.75. Only an agent that reasons correctly about the full situation reaches 1.0+. This gradient is what GRPO needs to learn.
 
 ---
 
@@ -360,7 +360,7 @@ openenv-supply-chain/
 |---------|--------------|
 | 6 task types | Added `price_negotiation`, `port_strike`, `quality_control`, `competing_buyer` |
 | Procedural generator | Any integer ID → valid deterministic task — infinite training variety |
-| Spam penalty | Reward penalty for calling same tool > 5 times consecutively |
+| Spam penalty | Reward penalty for calling same tool > 2 times total in the episode |
 | Step efficiency bonus | Up to +0.15 for faster solutions — rewards decisive reasoning |
 | Budget efficiency bonus | Up to +0.10 on hard tasks based on budget remaining |
 | `_tool_call_log` | Full per-episode tool call history for debugging and reward computation |
