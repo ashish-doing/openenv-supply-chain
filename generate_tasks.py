@@ -6,11 +6,12 @@ The environment calls generate_task(task_id) at reset time — no hardcoded list
 
 Task ID → difficulty mapping:
   0–49   → easy              (reorder)
-  50–99  → medium/reorder    (reroute or demand spike)
+  50–99  → medium            (reroute if even, demand_spike if odd)
   100–149→ medium            (price_negotiation)
-  150–199→ hard              (multi_product_crisis or port_strike)
+  150–199→ hard              (multi_product_crisis)
   200–249→ hard              (quality_control)
   250–299→ hard              (competing_buyer)
+  300+   → cycles all hard types
 
   Special IDs kept for backward compatibility with old hardcoded tasks:
   0,1,2 → easy
@@ -19,6 +20,11 @@ Task ID → difficulty mapping:
   10,11 → hard multi_product/port_strike
   12    → hard quality_control
   13    → hard competing_buyer
+
+FIX v4.1:
+  - _medium_demand_spike() is now a proper generator (was incorrectly reusing
+    _medium_reroute() and just renaming the type, which produced tasks with the
+    wrong goal structure — no demand_spike flag, wrong goal_supplier/goal_product).
 
 Usage (CLI):
   python generate_tasks.py --task_id 42
@@ -48,7 +54,6 @@ SUPPLIER_NAMES = [
 COMPETITOR_NAMES = ["RivalCorp", "NexusInc", "OmegaTrade", "ApexBuyers", "ZenithGroup"]
 
 # ── Backward-compatible fixed tasks (IDs 0–13) ─────────────────────────────────
-# These match your original hardcoded tasks exactly so validate.py still passes.
 
 _FIXED_TASKS = {
     0: {
@@ -295,15 +300,15 @@ _FIXED_TASKS = {
 # ── Procedural generators ──────────────────────────────────────────────────────
 
 def _easy(task_id: int, rng: random.Random) -> dict:
-    p    = rng.choice(PRODUCTS[:12])
-    qty  = rng.randint(100, 400)
-    stock = rng.randint(15, 80)
+    p      = rng.choice(PRODUCTS[:12])
+    qty    = rng.randint(100, 400)
+    stock  = rng.randint(15, 80)
     demand = rng.randint(20, 55)
     threshold = demand * 2
     sa_name = rng.choice(SUPPLIER_NAMES[:4])
     sb_name = rng.choice([s for s in SUPPLIER_NAMES[:6] if s != sa_name])
     cost_a  = round(rng.uniform(0.8, 3.5), 2)
-    cost_b  = round(rng.uniform(0.6, cost_a), 2)  # B is cheaper but used for distraction
+    cost_b  = round(rng.uniform(0.6, cost_a), 2)
     return {
         "id": task_id,
         "difficulty": "easy",
@@ -332,19 +337,21 @@ def _medium_reroute(task_id: int, rng: random.Random) -> dict:
     shp = f"SHP-{task_id:03d}"
     sa  = rng.choice(SUPPLIER_NAMES[:3])
     sb  = rng.choice([s for s in SUPPLIER_NAMES[:5] if s != sa])
+    stock  = rng.randint(10, 40)
+    demand = rng.randint(15, 45)
     return {
         "id": task_id,
         "difficulty": "medium",
         "type": "reroute",
         "description": (
-            f"SUPPLIER FAILED. You manage '{p}' stock: {rng.randint(10, 40)} units. "
-            f"Daily demand: {rng.randint(15, 45)} units. "
+            f"SUPPLIER FAILED. You manage '{p}' stock: {stock} units. "
+            f"Daily demand: {demand} units. "
             f"{sa} status: FAILED. {sb} is healthy. "
             f"Task: Reroute shipment {shp} from {sa} to {sb}, "
             f"then place emergency order of {qty} units with {sb}."
         ),
-        "initial_inventory": {p: rng.randint(10, 40)},
-        "daily_demand": {p: rng.randint(15, 45)},
+        "initial_inventory": {p: stock},
+        "daily_demand": {p: demand},
         "reorder_threshold": {p: 50},
         "suppliers": {
             sa: {"status": "failed", "lead_days": 0, "cost_per_unit": round(rng.uniform(4.0, 8.0), 2)},
@@ -357,21 +364,62 @@ def _medium_reroute(task_id: int, rng: random.Random) -> dict:
     }
 
 
+def _medium_demand_spike(task_id: int, rng: random.Random) -> dict:
+    """
+    FIX v4.1: Proper demand spike generator.
+    Previously this was _medium_reroute() with type renamed — wrong goal structure,
+    no demand_spike flag, and _all_goals_met() would check reroute goals that
+    didn't exist, making the task impossible to complete correctly.
+    """
+    p          = rng.choice(PRODUCTS[:12])
+    normal_demand = rng.randint(30, 70)
+    # Spike is 3x normal demand
+    spike_demand  = normal_demand * 3
+    stock      = rng.randint(50, 150)
+    # Order quantity must cover at least 5 days of spike demand
+    qty        = rng.randint(spike_demand * 5, spike_demand * 8)
+    sa_name    = rng.choice(SUPPLIER_NAMES[:3])
+    sb_name    = rng.choice([s for s in SUPPLIER_NAMES[:5] if s != sa_name])
+    cost_a     = round(rng.uniform(1.5, 5.0), 2)
+    cost_b     = round(rng.uniform(1.2, cost_a), 2)
+    return {
+        "id": task_id,
+        "difficulty": "medium",
+        "type": "demand_spike",
+        "description": (
+            f"DEMAND SPIKE DETECTED. You manage '{p}'. "
+            f"Normal demand: {normal_demand} units/day. "
+            f"Demand just spiked 3x to {spike_demand} units/day. "
+            f"Stock: {stock} units. {sa_name} is healthy. "
+            f"Task: Check demand forecast (spike warning visible), "
+            f"check inventory, and place an urgent order of {qty} units with {sa_name}."
+        ),
+        "initial_inventory": {p: stock},
+        "daily_demand": {p: spike_demand},
+        "demand_spike": True,
+        "reorder_threshold": {p: normal_demand * 3},
+        "suppliers": {
+            sa_name: {"status": "healthy", "lead_days": rng.randint(1, 3), "cost_per_unit": cost_a},
+            sb_name: {"status": "delayed", "lead_days": rng.randint(8, 14), "cost_per_unit": cost_b},
+        },
+        "goal_product": p,
+        "goal_supplier": sa_name,
+        "goal_quantity": qty,
+    }
+
+
 def _medium_price(task_id: int, rng: random.Random) -> dict:
     p       = rng.choice(PRODUCTS[10:])
     qty     = rng.randint(200, 500)
     budget  = round(qty * rng.uniform(2.2, 3.5), 2)
-    # Generate 3 suppliers: one delayed (cheapest), two healthy at different prices
     prices  = sorted([round(rng.uniform(1.8, 4.0), 2) for _ in range(3)])
     names   = rng.sample(SUPPLIER_NAMES[4:], 3)
-    # Make sure cheapest healthy is deterministic: names[1] is cheapest healthy
     sup = {
         names[0]: {"status": "healthy",  "lead_days": rng.randint(2, 4),  "cost_per_unit": prices[2]},
         names[1]: {"status": "healthy",  "lead_days": rng.randint(1, 3),  "cost_per_unit": prices[1]},
         names[2]: {"status": "delayed",  "lead_days": rng.randint(8, 15), "cost_per_unit": prices[0]},
     }
     mkt = {n: {p: v["cost_per_unit"], "quote_valid_hours": rng.randint(12, 48)} for n, v in sup.items()}
-    # goal_supplier = cheapest healthy = names[1]
     return {
         "id": task_id,
         "difficulty": "medium",
@@ -432,14 +480,13 @@ def _hard_multicrisis(task_id: int, rng: random.Random) -> dict:
 
 
 def _hard_quality(task_id: int, rng: random.Random) -> dict:
-    prods   = rng.sample(PRODUCTS[11:16], 2)
-    shp     = f"SHP-{task_id:03d}"
-    budget  = round(rng.uniform(5000, 12000), 2)
+    prods     = rng.sample(PRODUCTS[11:16], 2)
+    shp       = f"SHP-{task_id:03d}"
+    budget    = round(rng.uniform(5000, 12000), 2)
     threshold = rng.choice([0.03, 0.05, 0.08])
-    # sa: bad defect rate, sb: just under threshold, sc: zero
-    bad_rate   = round(rng.uniform(0.15, 0.45), 3)
-    good_rate  = round(rng.uniform(0.0, threshold - 0.005), 3)
-    names  = rng.sample(SUPPLIER_NAMES, 3)
+    bad_rate  = round(rng.uniform(0.15, 0.45), 3)
+    good_rate = round(rng.uniform(0.0, threshold - 0.005), 3)
+    names     = rng.sample(SUPPLIER_NAMES, 3)
     sa, sb, sc = names
     return {
         "id": task_id,
@@ -475,15 +522,15 @@ def _hard_quality(task_id: int, rng: random.Random) -> dict:
 
 
 def _hard_competing(task_id: int, rng: random.Random) -> dict:
-    prods  = rng.sample(PRODUCTS[13:], 2)   # semiconductor-tier products
-    budget = round(rng.uniform(4000, 9000), 2)
-    steps  = rng.randint(4, 8)
-    comp   = rng.choice(COMPETITOR_NAMES)
-    cap    = rng.randint(400, 700)
+    prods    = rng.sample(PRODUCTS[13:], 2)
+    budget   = round(rng.uniform(4000, 9000), 2)
+    steps    = rng.randint(4, 8)
+    comp     = rng.choice(COMPETITOR_NAMES)
+    cap      = rng.randint(400, 700)
     comp_qty = rng.randint(250, cap - 100)
-    sa, sb = rng.sample(SUPPLIER_NAMES, 2)
-    price_a = round(rng.uniform(10, 20), 2)
-    price_b = round(rng.uniform(0.3, 2.0), 2)
+    sa, sb   = rng.sample(SUPPLIER_NAMES, 2)
+    price_a  = round(rng.uniform(10, 20), 2)
+    price_b  = round(rng.uniform(0.3, 2.0), 2)
     min_qty_a = rng.randint(200, 350)
     min_qty_b = rng.randint(150, 300)
     return {
@@ -525,38 +572,31 @@ def generate_task(task_id: int, seed: int = None) -> dict:
     """
     Generate a single task deterministically from task_id.
 
-    - Fixed IDs (0,1,2,5,6,7,10,11,12,13) return the original hardcoded tasks
-      so validate.py and existing tests still pass unchanged.
-    - Any other ID is generated procedurally using task_id as the seed
-      (overridden by explicit seed param if provided).
+    Fixed IDs (0,1,2,5,6,7,10,11,12,13) return the original hardcoded tasks.
+    Any other ID is generated procedurally using task_id as the seed.
 
     Difficulty routing for non-fixed IDs:
-      0–49   → easy
-      50–99  → medium (reroute or demand_spike, alternating)
+      0–49   → easy (reorder)
+      50–99  → medium: even=reroute, odd=demand_spike
       100–149→ medium (price_negotiation)
       150–199→ hard (multi_product_crisis)
       200–249→ hard (quality_control)
       250–299→ hard (competing_buyer)
-      300+   → cycles through all types
+      300+   → cycles through all hard types
     """
-    # Return fixed task if it exists (backward compat)
     if task_id in _FIXED_TASKS:
         return dict(_FIXED_TASKS[task_id])
 
-    # Procedural generation — seed is task_id by default for reproducibility
     rng = random.Random(seed if seed is not None else task_id)
 
     if task_id < 50:
         return _easy(task_id, rng)
     elif task_id < 100:
+        # FIX: even=reroute, odd=proper demand_spike (not reroute renamed)
         if task_id % 2 == 0:
             return _medium_reroute(task_id, rng)
         else:
-            # demand spike variant
-            t = _medium_reroute(task_id, rng)   # reuse structure
-            t["type"] = "demand_spike"
-            t["demand_spike"] = True
-            return t
+            return _medium_demand_spike(task_id, rng)
     elif task_id < 150:
         return _medium_price(task_id, rng)
     elif task_id < 200:
@@ -566,7 +606,6 @@ def generate_task(task_id: int, seed: int = None) -> dict:
     elif task_id < 300:
         return _hard_competing(task_id, rng)
     else:
-        # Cycle through all hard types for task_id >= 300
         funcs = [_hard_multicrisis, _hard_quality, _hard_competing]
         return funcs[task_id % 3](task_id, rng)
 
@@ -576,15 +615,10 @@ def generate_batch(
     seed: int = 42,
     difficulty: str = "all",
 ) -> list[dict]:
-    """
-    Generate a batch of tasks. Used by the CLI and by tests.
-    When difficulty='all', cycles evenly through easy/medium/hard.
-    """
+    """Generate a batch of tasks. Used by CLI and tests."""
     rng    = random.Random(seed)
     levels = ["easy", "medium", "hard"] if difficulty == "all" else [difficulty]
     tasks  = []
-    base   = {"easy": 20, "medium": 60, "price_negotiation": 110,
-              "hard": 160, "quality_control": 210, "competing_buyer": 260}
     for i in range(count):
         level = levels[i % len(levels)]
         if level == "easy":
@@ -602,12 +636,12 @@ def generate_batch(
 
 def main():
     ap = argparse.ArgumentParser(description="Supply chain task generator")
-    ap.add_argument("--task_id",    type=int,   default=None,  help="Generate a single task by ID")
-    ap.add_argument("--count",      type=int,   default=6,     help="Number of tasks to generate")
-    ap.add_argument("--seed",       type=int,   default=42,    help="Random seed")
+    ap.add_argument("--task_id",    type=int,   default=None)
+    ap.add_argument("--count",      type=int,   default=6)
+    ap.add_argument("--seed",       type=int,   default=42)
     ap.add_argument("--difficulty", type=str,   default="all",
-                    choices=["easy", "medium", "hard", "all"], help="Filter by difficulty")
-    ap.add_argument("--pretty",     action="store_true",       help="Pretty-print JSON")
+                    choices=["easy", "medium", "hard", "all"])
+    ap.add_argument("--pretty",     action="store_true")
     args = ap.parse_args()
 
     indent = 2 if args.pretty else None

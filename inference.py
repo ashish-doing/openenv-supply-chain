@@ -1,5 +1,5 @@
 """
-inference.py — Supply Chain Environment Baseline Inference (v4)
+inference.py — Supply Chain Environment Baseline Inference (v4.1)
 
 Required env vars:
   API_BASE_URL   The API endpoint for the LLM (e.g. https://router.huggingface.co/v1)
@@ -17,6 +17,12 @@ JUDGE LOG FORMAT — stdout emits exactly:
   [START] task=<task_name> env=<benchmark> model=<model_name>
   [STEP]  step=<n> action=<action_str> reward=<0.00> done=<true|false> error=<msg|null>
   [END]   success=<true|false> steps=<n> score=<0.000> rewards=<r1,r2,...,rn>
+
+FIX v4.1:
+  - SYSTEM_PROMPT quality_control section now includes cancel_shipment step
+    (task 12 requires cancel + 2 orders, but old prompt only mentioned place_order)
+  - log_end() used in main() exception handler (was bare hardcoded print)
+  - rewards[-1] used for score (not max(rewards))
 """
 
 import json
@@ -41,7 +47,9 @@ MAX_STEPS = 25
 client = OpenAI(api_key=HF_TOKEN or "dummy", base_url=API_BASE_URL)
 
 # ---------------------------------------------------------------------------
-# System prompt — v4
+# System prompt — v4.1
+# FIX: quality_control section now explicitly includes cancel_shipment before
+#      place_order, matching what _all_goals_met() actually requires for task 12.
 # ---------------------------------------------------------------------------
 SYSTEM_PROMPT = """You are a supply chain manager AI. Respond with ONLY a single JSON object — no markdown, no explanation, no text before or after.
 
@@ -75,6 +83,7 @@ AVAILABLE TOOLS — exact argument schemas
 
 {"tool": "cancel_shipment", "args": {"shipment_id": "SHP-001"}}
   → shipment_id: get exact ID from get_pending_shipments first
+  → Use this when a shipment is from a failed/strike/defective supplier
 
 {"tool": "get_pending_shipments", "args": {}}
   → Lists all in-flight shipments with their IDs. Call this before reroute/cancel.
@@ -94,11 +103,12 @@ DECISION TREE — follow in order every episode
 ═══════════════════════════════════════════════
 
 STEP 1 — DETECT TASK TYPE from the observation text:
-  • Contains "price" or "budget" or "cheapest"    → price_negotiation task
-  • Contains "defect" or "quality" or "compliant" → quality_control task
+  • Contains "price" or "budget" or "cheapest"      → price_negotiation task
+  • Contains "defect" or "quality" or "compliant"   → quality_control task
   • Contains "competitor" or "competing" or "rival" → competing_buyer task
-  • Contains "FAILED" or "failed" or "strike"     → reroute/multi-crisis task
-  • Otherwise                                      → easy reorder task
+  • Contains "FAILED" or "failed" or "strike"       → reroute/multi-crisis task
+  • Contains "DEMAND SPIKE" or "spiked"             → demand_spike task
+  • Otherwise                                        → easy reorder task
 
 STEP 2 — GATHER INFORMATION (call read tools BEFORE acting):
 
@@ -111,13 +121,14 @@ STEP 2 — GATHER INFORMATION (call read tools BEFORE acting):
 
   For quality_control tasks ONLY:
     c) Call get_quality_report → identify suppliers with defect_rate ≤ threshold
+    d) Call get_pending_shipments → get the defective shipment ID to cancel
        RULE: Never order from a supplier that FAILS the quality report
 
   For competing_buyer tasks ONLY:
     c) Call get_competing_bids IMMEDIATELY (skip other reads if steps > 3)
-       RULE: Order from SupplierA before the competitor countdown hits 0
+       RULE: Order from the scarce supplier before the competitor countdown hits 0
 
-  For reroute tasks (observation mentions SHP- shipment IDs):
+  For reroute/port_strike tasks (observation mentions SHP- shipment IDs):
     c) Call get_pending_shipments → get exact shipment IDs
 
 STEP 3 — ACT:
@@ -125,19 +136,29 @@ STEP 3 — ACT:
   Easy reorder:
     → place_order with goal_supplier, goal_product, goal_quantity from description
 
+  Demand spike:
+    → place_order with the healthy supplier for the large quantity in description
+
   Price negotiation:
     → place_order with the CHEAPEST healthy supplier from get_market_prices
 
-  Quality control:
-    → place_order ONLY with a supplier that PASSED get_quality_report
+  Quality control — EXACT SEQUENCE (both steps required):
+    1. cancel_shipment for the defective shipment (get ID from get_pending_shipments)
+    2. place_order for EACH required product from a PASSED supplier ONLY
+    → RULE: cancel first, then order. Missing either step means task incomplete.
 
   Competing buyer:
-    → place_order immediately with SupplierA for the required quantity
+    → place_order immediately with the scarce supplier for the required quantity
+    → Then place_order for the second product from its supplier
     → Do NOT waste steps reading — the competitor clock is ticking
 
   Reroute + order:
     → reroute_shipment to a healthy supplier first
     → then place_order for the required product/supplier/quantity
+
+  Port strike:
+    → cancel_shipment for the stuck shipment
+    → place_order for EACH product from the only healthy supplier
 
   Multi-product crisis:
     → reroute any SHP- shipment to a healthy supplier
@@ -161,17 +182,27 @@ HARD RULES — never violate these
 3. NEVER exceed the budget — check remaining_budget in state before ordering
 4. ALWAYS use exact product names (lowercase, underscores) from get_inventory
 5. ALWAYS use exact shipment IDs from get_pending_shipments, not guesses
-6. Output ONLY the JSON object — zero extra characters
+6. For quality_control tasks: ALWAYS cancel the defective shipment first, THEN order
+7. Output ONLY the JSON object — zero extra characters
 
 ═══════════════════════════════════════════════
-EXAMPLE EPISODE (medium reroute task)
+EXAMPLE EPISODES
 ═══════════════════════════════════════════════
-Observation: "SupplierA FAILED. Reroute SHP-001 to SupplierB. Order 100 units of 'canned_soup'."
 
-Turn 1 → {"tool": "get_inventory", "args": {}}
-Turn 2 → {"tool": "get_pending_shipments", "args": {}}
-Turn 3 → {"tool": "reroute_shipment", "args": {"shipment_id": "SHP-001", "new_supplier": "SupplierB"}}
-Turn 4 → {"tool": "place_order", "args": {"supplier_name": "SupplierB", "product": "canned_soup", "quantity": 100}}
+Medium reroute task:
+  Observation: "SupplierA FAILED. Reroute SHP-001 to SupplierB. Order 100 units of 'canned_soup'."
+  Turn 1 → {"tool": "get_inventory", "args": {}}
+  Turn 2 → {"tool": "get_pending_shipments", "args": {}}
+  Turn 3 → {"tool": "reroute_shipment", "args": {"shipment_id": "SHP-001", "new_supplier": "SupplierB"}}
+  Turn 4 → {"tool": "place_order", "args": {"supplier_name": "SupplierB", "product": "canned_soup", "quantity": 100}}
+
+Hard quality_control task:
+  Observation: "QUALITY CRISIS. SupplierA defect rate 35%. Cancel SHP-012. Order only from compliant suppliers."
+  Turn 1 → {"tool": "get_quality_report", "args": {}}
+  Turn 2 → {"tool": "get_pending_shipments", "args": {}}
+  Turn 3 → {"tool": "cancel_shipment", "args": {"shipment_id": "SHP-012"}}
+  Turn 4 → {"tool": "place_order", "args": {"supplier_name": "SupplierB", "product": "vaccine_vial", "quantity": 300}}
+  Turn 5 → {"tool": "place_order", "args": {"supplier_name": "SupplierB", "product": "syringe", "quantity": 200}}
 """
 
 # ---------------------------------------------------------------------------
@@ -190,7 +221,7 @@ def log_start(task: str, env: str, model: str) -> None:
 
 def log_step(step: int, action: str, reward: float, done: bool, error: Optional[str]) -> None:
     error_val = error if error else "null"
-    done_val  = str(done).lower()          # must be lowercase: true / false
+    done_val  = str(done).lower()
     print(
         f"[STEP] step={step} action={action} reward={reward:.2f} done={done_val} error={error_val}",
         flush=True,
@@ -258,6 +289,9 @@ def build_user_message(obs_text: str, state: dict, step: int) -> str:
         reroutes = state.get("shipments_rerouted", [])
         if reroutes:
             hints.append(f"shipments_rerouted={len(reroutes)}")
+        cancelled = state.get("shipments_cancelled", [])
+        if cancelled:
+            hints.append(f"shipments_cancelled={len(cancelled)}")
         if hints:
             parts.append("\n[STATE] " + " | ".join(hints))
     parts.append(f"\n[STEP {step}/{MAX_STEPS}] What is your next action?")
@@ -279,11 +313,9 @@ def run_episode(task_id: int) -> float:
     score   = 0.0
     success = False
 
-    # Emit [START] — one per episode, at the very top
     log_start(task=task_name, env=BENCHMARK, model=MODEL_NAME)
 
     try:
-        # --- Reset environment ---
         resp = requests.post(
             f"{ENV_BASE_URL}/reset",
             params={"task_id": task_id, "seed": 42},
@@ -305,7 +337,6 @@ def run_episode(task_id: int) -> float:
         for step in range(1, MAX_STEPS + 1):
             error_msg = None
 
-            # --- LLM decides action ---
             try:
                 raw = client.chat.completions.create(
                     model=MODEL_NAME,
@@ -319,10 +350,8 @@ def run_episode(task_id: int) -> float:
                 action = {"tool": "get_inventory", "args": {}}
                 raw    = json.dumps(action)
 
-            # action_str for the log: just the tool name keeps it readable and single-line
             action_str = action.get("tool", "unknown")
 
-            # --- Step the environment ---
             try:
                 result = requests.post(
                     f"{ENV_BASE_URL}/step",
@@ -330,7 +359,6 @@ def run_episode(task_id: int) -> float:
                     timeout=15,
                 ).json()
             except Exception as e:
-                # Emit a STEP line so the grader parser never stalls
                 log_step(step=step, action=action_str, reward=0.0, done=True, error=str(e)[:80])
                 break
 
@@ -342,7 +370,6 @@ def run_episode(task_id: int) -> float:
             rewards.append(reward)
             steps_taken = step
 
-            # Emit [STEP] — one per step, immediately after env.step() returns
             log_step(step=step, action=action_str, reward=reward, done=done, error=error_msg)
 
             messages.append({"role": "assistant", "content": raw})
@@ -357,13 +384,11 @@ def run_episode(task_id: int) -> float:
 
             time.sleep(0.05)
 
-        # FIX: Use the final step reward (matches judge scoring logic).
-        # Previously used max(rewards) which inflated local scores vs judge scores.
+        # FIX: final step reward matches judge scoring logic (not max)
         score   = rewards[-1] if rewards else 0.0
         success = score >= 1.0
 
     finally:
-        # Emit [END] — always, even on exception
         log_end(success=success, steps=steps_taken, score=score, rewards=rewards)
 
     return score
@@ -374,7 +399,7 @@ def run_episode(task_id: int) -> float:
 # ---------------------------------------------------------------------------
 
 def main():
-    print("Supply Chain Environment — Baseline Inference v4", flush=True)
+    print("Supply Chain Environment — Baseline Inference v4.1", flush=True)
     print(f"Model      : {MODEL_NAME}", flush=True)
     print(f"Environment: {ENV_BASE_URL}", flush=True)
 
@@ -390,28 +415,22 @@ def main():
     start_time = time.time()
 
     for tid in TASKS:
-        task_name = f"task_{tid}"
         try:
             scores[tid] = run_episode(tid)
-        except Exception as e:
-            # FIX: emit a well-formed [END] line with task name so the judge
-            # parser never stalls on a missing or malformed line.
+        except Exception:
+            # FIX: use log_end helper so judge parser never sees a malformed line
             log_end(success=False, steps=0, score=0.0, rewards=[])
             scores[tid] = 0.0
 
-        # 18-minute safety cutoff (hard limit is 20 min)
         if time.time() - start_time > 18 * 60:
             print("[WARN] Approaching 20-min limit — stopping early.", flush=True)
             break
 
-    # ---------------------------------------------------------------------------
-    # Human-readable summary (does NOT affect judge parsing)
-    # ---------------------------------------------------------------------------
     avg    = sum(scores.values()) / len(scores) if scores else 0.0
     by_diff = {
-        "easy":   [scores[t] for t in [0, 6]          if t in scores],
-        "medium": [scores[t] for t in [1, 5, 7, 12]   if t in scores],
-        "hard":   [scores[t] for t in [2, 10, 11, 13] if t in scores],
+        "easy":   [scores[t] for t in [0, 1, 2]       if t in scores],
+        "medium": [scores[t] for t in [5, 6, 7]        if t in scores],
+        "hard":   [scores[t] for t in [10, 11, 12, 13] if t in scores],
     }
 
     print(f"\n{'='*50}", flush=True)

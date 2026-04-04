@@ -1,21 +1,15 @@
 # Copyright (c) Meta Platforms, Inc. and affiliates.
 """
-Data models for the Supply Chain Environment (v4).
+Data models for the Supply Chain Environment (v4.1).
 
 Defines typed Action, Observation, State, and Rubrics following the OpenEnv spec
 and RFC 004 (rubric system). All are exported from supply_chain_env.__init__.
 
-Rubric usage:
-    from supply_chain_env.models import SupplyChainRubric, ExactGoalRubric
-
-    # Default rubric (layered outcome + process)
-    rubric = SupplyChainRubric()
-
-    # Inject at reset to get rubric_reward alongside raw reward:
-    obs = env.reset(task_id=12)
-    result = env.step(action)
-    print(result.reward)         # raw layered reward (0.0–1.30)
-    print(result.rubric_reward)  # rubric score (0.0–1.0, normalised)
+FIX v4.1:
+  - PartialCreditRubric reward_max changed from 1.30 to 1.0 (reward is capped at 1.0)
+  - SupplyChainObservation.reward docstring corrected to Range 0.0-1.0
+  - SupplyChainObservation.rubric_reward docstring corrected (process values were swapped)
+  - SupplyChainRubric default outcome uses reward_max=1.0
 """
 
 from __future__ import annotations
@@ -26,7 +20,6 @@ from pydantic import BaseModel, Field
 try:
     from openenv.core.env_server.types import Action, Observation
 except ImportError:
-    # Graceful fallback so models can be imported without openenv-core installed
     Action = BaseModel       # type: ignore[assignment,misc]
     Observation = BaseModel  # type: ignore[assignment,misc]
 
@@ -143,20 +136,30 @@ class SupplyChainObservation(Observation):
     reward: float = Field(
         default=0.0,
         description=(
-            "Raw layered reward. Range 0.0–1.30. "
-            "0.10 (any action), 0.50 (order/reroute), 0.75 (sub-task), "
-            "1.00 (all goals met), +0.15 step efficiency, +0.10 budget efficiency. "
-            "Spam penalty applies for >5 consecutive identical tool calls."
+            "Raw layered reward. Range 0.0-1.0 (hard capped). "
+            "Layer 0: 0.05 (participation — any tool called). "
+            "Layer 1: up to 0.25 (diagnostics — read tools used before acting). "
+            "Layer 2: 0.50 (action taken — any order placed or shipment action). "
+            "Layer 3: 0.65-0.80 (sub-goals — reroute/cancel/quality/competing). "
+            "Layer 4: 1.00 (all goals met). "
+            "Step efficiency bonus (up to +0.15) and budget efficiency bonus "
+            "(up to +0.10) are folded into the 1.0 cap. "
+            "Spam penalty: -0.02 per excess call beyond 2 uses of the same tool "
+            "(floor 0.0, only applied when score < 1.0)."
         ),
     )
     rubric_reward: Optional[float] = Field(
         default=None,
         description=(
-            "RFC-004 rubric reward. Range 0.0–1.0 (normalised). "
+            "RFC-004 rubric reward. Range -0.05 to 1.0. "
             "Populated when a SupplyChainRubric is active. "
-            "On non-terminal steps: process reward (0.0 success, -0.05 per error). "
-            "On terminal step: outcome reward (1.0 all goals met, partial credit otherwise). "
-            "Use this for GRPO/RL training — it is more comparable across tasks than raw reward."
+            "On non-terminal steps: process reward — "
+            "0.00 for neutral tool calls, "
+            "-0.05 for errors/unknown tools, "
+            "+0.05 for actions that directly advance the goal (order placed, reroute done). "
+            "On terminal step: outcome reward — 1.0 if all goals met, "
+            "partial credit (0.0-1.0) otherwise based on raw reward / 1.0. "
+            "Use this for GRPO/RL training — more comparable across tasks than raw reward."
         ),
     )
 
@@ -182,9 +185,11 @@ class PartialCreditRubric:
     Equivalent to REPL's FuzzyMatchRubric. Use for hard multi-goal tasks
     where the agent deserves credit for completing sub-goals even if the
     episode ends before all goals are met.
+
+    reward_max must match the actual environment reward cap (1.0).
     """
 
-    def __init__(self, reward_max: float = 1.30):
+    def __init__(self, reward_max: float = 1.0):
         self.reward_max = reward_max
 
     def score(self, final_reward: float, expected: Any = None) -> float:
@@ -197,7 +202,7 @@ class ProcessRubric:
 
     Equivalent to REPL's CodeExecutionRubric. Returns:
       -0.05  tool returned an error / unknown tool
-       0.00  any valid tool call
+       0.00  any valid neutral tool call
       +0.05  action that directly advances the goal (order placed, reroute done)
 
     Use this to shape intermediate steps in RL training.
@@ -237,14 +242,15 @@ class SupplyChainRubric:
     Combines an outcome rubric (terminal steps) and a process rubric
     (non-terminal steps) into a single rubric_reward signal.
 
-    This is the rubric returned in observation.rubric_reward and is what
-    judges use to compare reward quality across submissions.
+    FIX v4.1: Default PartialCreditRubric uses reward_max=1.0 (was 1.30).
+    Since environment reward is hard-capped at 1.0, using reward_max=1.30
+    caused perfect episodes to score 0.769 rubric_reward instead of 1.0.
 
     Usage:
-        rubric = SupplyChainRubric()                        # defaults
+        rubric = SupplyChainRubric()                           # defaults
         rubric = SupplyChainRubric(outcome=ExactGoalRubric())  # binary only
         rubric = SupplyChainRubric(
-            outcome=PartialCreditRubric(reward_max=1.30),
+            outcome=PartialCreditRubric(reward_max=1.0),
             process=ProcessRubric(),
         )
 
@@ -257,16 +263,15 @@ class SupplyChainRubric:
                 done=result.done,
                 action_advanced_goal="SUCCESS" in result.text,
             )
-            # use rubric_reward for GRPO loss
 
     Reward semantics:
         Terminal step (done=True):
-            Uses outcome rubric — PartialCreditRubric by default.
-            Range: 0.0–1.0.
+            Uses outcome rubric — PartialCreditRubric(reward_max=1.0) by default.
+            Range: 0.0-1.0.
         Non-terminal step (done=False):
             Uses process rubric — ProcessRubric by default.
-            Range: -0.05–0.05.
-        Failure (max steps exhausted without done):
+            Range: -0.05 to +0.05.
+        Timeout (max steps exhausted without done):
             Returns failure_reward (default -0.10).
     """
 
@@ -277,10 +282,11 @@ class SupplyChainRubric:
         failure_reward: float = -0.10,
         gamma: float = 1.0,
     ):
-        self.outcome = outcome or PartialCreditRubric(reward_max=1.30)
+        # FIX: reward_max=1.0 (was 1.30) — env reward is capped at 1.0
+        self.outcome = outcome or PartialCreditRubric(reward_max=1.0)
         self.process = process or ProcessRubric()
         self.failure_reward = failure_reward
-        self.gamma = gamma          # temporal discount for multi-step credit assignment
+        self.gamma = gamma
 
     def score(
         self,
@@ -296,13 +302,13 @@ class SupplyChainRubric:
         Compute rubric reward for one step.
 
         Args:
-            obs_text:            Observation text from the environment.
-            raw_reward:          Raw reward returned by the environment.
-            done:                Whether the episode is finished.
+            obs_text:             Observation text from the environment.
+            raw_reward:           Raw reward returned by the environment.
+            done:                 Whether the episode is finished.
             action_advanced_goal: True if the action directly moved toward the goal.
-            expected:            Optional expected outcome for custom rubrics.
-            step:                Current step number (used for gamma discounting).
-            max_steps:           Max steps (used to detect timeout).
+            expected:             Optional expected outcome for custom rubrics.
+            step:                 Current step number (used for gamma discounting).
+            max_steps:            Max steps (used to detect timeout).
 
         Returns:
             float: rubric_reward in range [-0.10, 1.0].

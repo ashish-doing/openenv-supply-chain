@@ -1,6 +1,11 @@
 """
 FastAPI application for the Supply Chain Environment.
 Serves the environment over HTTP + WebSocket with pre-filled Swagger examples.
+
+FIX v4.1:
+  - Added GET /state endpoint (was in openenv.yaml and client.py but missing here — 404)
+  - Removed difficulty param from WebSocket reset handler (was silently ignored)
+  - /quick/reset no longer calls localhost:7860 (deadlock fix — now direct instantiation)
 """
 
 try:
@@ -23,7 +28,7 @@ except ImportError:
 
 import json
 from fastapi import Body, WebSocket, WebSocketDisconnect
-from fastapi.responses import RedirectResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from pydantic import BaseModel, Field
 from typing import Any, Dict
 
@@ -37,10 +42,13 @@ app = create_app(
     max_concurrent_envs=1,
 )
 
+# Shared env instance for /state and /quick/* endpoints
+_env = SupplyChainEnvironment()
+
 # ── Request models with Swagger examples ──────────────────────────────────────
 
 class ResetRequest(BaseModel):
-    task_id: int = Field(default=0, description="Task ID: 0-2=easy, 5-6=medium, 10-11=hard")
+    task_id: int = Field(default=0, description="Task ID: 0-2=easy, 5-7=medium, 10-13=hard")
     seed: int = Field(default=42, description="Random seed for reproducibility")
 
     model_config = {
@@ -67,9 +75,26 @@ class StepRequest(BaseModel):
                     "shipment_id": "SHP-001",
                     "new_supplier": "SupplierB"
                 }},
+                {"tool": "cancel_shipment", "args": {
+                    "shipment_id": "SHP-001"
+                }},
             ]
         }
     }
+
+# ── GET /state — FIX: was in openenv.yaml + client.py but missing here ────────
+
+@app.get(
+    "/state",
+    tags=["Core"],
+    summary="Get current episode state",
+    description="Returns the full state dict for the current episode (all 13 standard fields).",
+)
+async def get_state():
+    try:
+        return _env._get_state_dict()
+    except Exception as exc:
+        return JSONResponse(status_code=500, content={"error": str(exc)})
 
 # ── WebSocket endpoint ────────────────────────────────────────────────────────
 
@@ -115,6 +140,8 @@ async def websocket_endpoint(websocket: WebSocket):
             if action_type == "reset":
                 task_id = int(msg.get("task_id", 0))
                 seed    = int(msg.get("seed", 42))
+                # FIX: difficulty param removed — not implemented server-side,
+                # was silently ignored causing confusing behaviour
                 try:
                     obs = env.reset(task_id=task_id, seed=seed)
                     await websocket.send_text(json.dumps({
@@ -163,7 +190,7 @@ async def websocket_endpoint(websocket: WebSocket):
                 }))
 
     except WebSocketDisconnect:
-        pass  # Client disconnected cleanly — nothing to do
+        pass
 
 
 # ── HTTP convenience endpoints ────────────────────────────────────────────────
@@ -177,11 +204,10 @@ async def root():
     "/quick/reset",
     tags=["Quick Start"],
     summary="Reset environment (easy to use)",
-    description="Start a new episode. Use task_id 0-2 for easy, 5-6 for medium, 10-11 for hard."
+    description="Start a new episode. Use task_id 0-2 for easy, 5-7 for medium, 10-13 for hard.",
 )
 async def quick_reset(body: ResetRequest = Body(...)):
-    # FIX: Previously made an internal HTTP call to localhost:7860 which
-    # deadlocks (the server calling itself). Now directly instantiates env.
+    # FIX: Direct instantiation — no localhost self-call deadlock
     env = SupplyChainEnvironment()
     obs = env.reset(task_id=body.task_id, seed=body.seed)
     return {
@@ -198,7 +224,10 @@ async def quick_reset(body: ResetRequest = Body(...)):
     "/quick/step",
     tags=["Quick Start"],
     summary="Execute a tool action (easy to use)",
-    description="DEMO ONLY — creates a fresh stateless episode per call. For real stateful multi-step play, use POST /reset first, then POST /step repeatedly."
+    description=(
+        "DEMO ONLY — creates a fresh stateless episode per call. "
+        "For real stateful multi-step play, use POST /reset then POST /step repeatedly."
+    ),
 )
 async def quick_step(body: StepRequest = Body(...)):
     env = SupplyChainEnvironment()
@@ -212,7 +241,7 @@ async def quick_step(body: StepRequest = Body(...)):
         },
         "reward": result.reward,
         "done":   result.done,
-        "hint": "reward=1.0 means task complete! Try the full /reset + /step sequence for stateful play."
+        "hint": "reward=1.0 means task complete! Use /reset + /step for stateful play.",
     }
 
 
@@ -220,7 +249,7 @@ async def quick_step(body: StepRequest = Body(...)):
     "/quick/demo",
     tags=["Quick Start"],
     summary="Run a complete demo episode",
-    description="Automatically runs a full easy task from reset to completion."
+    description="Automatically runs a full easy task (task_id=0) from reset to completion.",
 )
 async def quick_demo():
     env = SupplyChainEnvironment()
@@ -233,7 +262,7 @@ async def quick_demo():
         SupplyChainAction(tool="place_order", args={
             "supplier_name": "SupplierA",
             "product": "bottled_water",
-            "quantity": 200
+            "quantity": 200,
         }),
     ]
 
@@ -257,7 +286,7 @@ async def quick_demo():
         "result":       "SUCCESS" if steps[-1]["reward"] >= 1.0 else "INCOMPLETE",
         "final_reward": steps[-1]["reward"],
         "episode":      steps,
-        "message":      "This is what an AI agent experiences each step. Reward 1.0 means task solved!"
+        "message":      "Reward 1.0 = task solved. Use /reset + /step for agent play.",
     }
 
 
