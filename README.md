@@ -48,7 +48,7 @@ Most RL environments for LLMs are either too simple (toy grids, word games) or t
 | Dockerfile builds | ✅ |
 | `inference.py` produces `[START]`/`[STEP]`/`[END]` logs | ✅ |
 | 3+ tasks with graders, scores in 0.0–1.30 | ✅ (10 fixed + infinite procedural) |
-| `python validate.py` → 85/85 checks pass | ✅ |
+| `python validate.py` → 118/118 checks pass | ✅ |
 
 ---
 
@@ -326,7 +326,7 @@ python inference.py
 ```bash
 python validate.py
 # Expected output:
-# 85/85 checks across 14 sections
+# 118/118 checks across 14 sections
 # STATUS: READY TO SUBMIT ✓
 ```
 
@@ -339,11 +339,14 @@ openenv-supply-chain/
 ├── server/
 │   ├── app.py                          # FastAPI server — OpenEnv endpoints
 │   └── supply_chain_env_environment.py # Environment logic (all 6 task types)
+├── tests/
+│   ├── __init__.py
+│   └── test_environment.py             # pytest suite (36 tests)
 ├── generate_tasks.py                   # Procedural task generator (fixed + infinite pool)
 ├── models.py                           # Pydantic typed models (Action, Observation, State)
 ├── client.py                           # Python client for training code
 ├── inference.py                        # Baseline LLM agent — emits [START]/[STEP]/[END] logs
-├── validate.py                         # Pre-submission validator (85 checks)
+├── validate.py                         # Pre-submission validator (118 checks)
 ├── openenv.yaml                        # OpenEnv spec config
 ├── Dockerfile                          # Container definition
 └── pyproject.toml                      # Package config
@@ -376,11 +379,12 @@ openenv-supply-chain/
 - Corrected task ID mapping in validator (sections 8–11).
 - Procedural task generator: any integer task ID now produces a valid deterministic task.
 - Added `_tool_call_log`, spam penalty, step efficiency bonus, and budget efficiency bonus.
-- Validator expanded to 85 checks across 14 sections.
+- Validator expanded to 118 checks across 14 sections.
 - Reward upper bound raised to 1.30 to accommodate stacked bonuses.
 - State dict standardised to 13 fields; `goal_description` and `task_type` added.
 - `inference.py` updated to emit exact `[START]`/`[STEP]`/`[END]` judge log format.
 - Default inference model changed to `Qwen/Qwen2.5-7B-Instruct` for runtime compliance.
+- Added `tests/` folder with 36-test pytest suite.
 
 ### v3
 - Added `quality_control` and `competing_buyer` task types.
