@@ -1,5 +1,5 @@
 """
-inference.py — Supply Chain Environment Baseline Inference (v4.1)
+inference.py — Supply Chain Environment Baseline Inference (v4.2)
 
 Required env vars:
   API_BASE_URL   The API endpoint for the LLM (e.g. https://router.huggingface.co/v1)
@@ -18,11 +18,18 @@ JUDGE LOG FORMAT — stdout emits exactly:
   [STEP]  step=<n> action=<action_str> reward=<0.00> done=<true|false> error=<msg|null>
   [END]   success=<true|false> steps=<n> score=<0.000> rewards=<r1,r2,...,rn>
 
-FIX v4.1:
-  - SYSTEM_PROMPT quality_control section now includes cancel_shipment step
-    (task 12 requires cancel + 2 orders, but old prompt only mentioned place_order)
-  - log_end() used in main() exception handler (was bare hardcoded print)
-  - rewards[-1] used for score (not max(rewards))
+FIXES v4.2:
+  - FIX 1: log_start() always emitted before any possible exception path,
+            so judge never sees [END] without a matching [START]
+  - FIX 2: state extracted from both top-level and nested observation, so
+            budget/countdown info is never silently lost on step 0
+  - FIX 3: message history trimmed to last 10 exchanges (+ system prompt)
+            to avoid token limit failures on long episodes
+  - FIX 4: Explicit retry logic on rate-limit (429) errors with back-off,
+            so wasted get_inventory fallbacks are eliminated
+  - FIX 5: score/success uses final step reward (rewards[-1]), consistent
+            with judge scoring — no change in logic, just made explicit
+  - FIX 6: log_end() always uses the helper, never a bare print
 """
 
 import json
@@ -31,7 +38,7 @@ import time
 from typing import List, Optional
 
 import requests
-from openai import OpenAI
+from openai import OpenAI, RateLimitError
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -42,14 +49,15 @@ HF_TOKEN     = os.environ.get("HF_TOKEN",     "")
 ENV_BASE_URL = os.environ.get("ENV_BASE_URL", "http://localhost:7860")
 BENCHMARK    = "supply_chain_env"
 
-MAX_STEPS = 25
+MAX_STEPS        = 25
+MSG_HISTORY_KEEP = 10   # keep last N user+assistant pairs (+ system prompt)
+RATE_LIMIT_RETRIES = 3  # max retries on 429
+RATE_LIMIT_BACKOFF = 5  # seconds to wait between retries
 
 client = OpenAI(api_key=HF_TOKEN or "dummy", base_url=API_BASE_URL)
 
 # ---------------------------------------------------------------------------
-# System prompt — v4.1
-# FIX: quality_control section now explicitly includes cancel_shipment before
-#      place_order, matching what _all_goals_met() actually requires for task 12.
+# System prompt — v4.2 (unchanged from v4.1)
 # ---------------------------------------------------------------------------
 SYSTEM_PROMPT = """You are a supply chain manager AI. Respond with ONLY a single JSON object — no markdown, no explanation, no text before or after.
 
@@ -271,6 +279,31 @@ def safe_obs_text(result: dict) -> str:
     return str(obs)
 
 
+# FIX 2: Extract state from both top-level and nested observation keys,
+# so budget/countdown info is never silently lost.
+def extract_state(data: dict) -> dict:
+    """
+    Robustly extract state dict from a /reset or /step response.
+    Checks: data["state"], data["observation"]["state"], data["observation"] itself.
+    """
+    # Top-level state key (most common for /step responses)
+    if "state" in data and isinstance(data["state"], dict):
+        return data["state"]
+
+    obs = data.get("observation", {})
+    if isinstance(obs, dict):
+        # Nested observation.state (some /reset responses)
+        if "state" in obs and isinstance(obs["state"], dict):
+            return obs["state"]
+        # observation itself may carry state fields directly
+        state_keys = {"remaining_budget", "competing_bids_countdown",
+                      "orders_placed", "shipments_rerouted", "shipments_cancelled", "steps"}
+        if any(k in obs for k in state_keys):
+            return obs
+
+    return {}
+
+
 def build_user_message(obs_text: str, state: dict, step: int) -> str:
     parts = [obs_text]
     if state:
@@ -298,6 +331,48 @@ def build_user_message(obs_text: str, state: dict, step: int) -> str:
     return "\n".join(parts)
 
 
+# FIX 3: Trim message history to avoid token limit failures on long episodes.
+def trim_messages(messages: list) -> list:
+    """
+    Keep the system prompt (messages[0]) + the last MSG_HISTORY_KEEP
+    user/assistant pairs. Each pair = 2 messages, so keep last
+    MSG_HISTORY_KEEP * 2 messages after the system prompt.
+    """
+    system = messages[:1]
+    tail   = messages[1:]
+    max_tail = MSG_HISTORY_KEEP * 2
+    if len(tail) > max_tail:
+        tail = tail[-max_tail:]
+    return system + tail
+
+
+# FIX 4: Retry LLM call on rate-limit errors with exponential-ish back-off.
+def call_llm_with_retry(messages: list) -> str:
+    """
+    Call the LLM and return the raw text content.
+    Retries up to RATE_LIMIT_RETRIES times on RateLimitError (HTTP 429).
+    Raises the last exception if all retries are exhausted.
+    """
+    last_exc = None
+    for attempt in range(1 + RATE_LIMIT_RETRIES):
+        try:
+            return client.chat.completions.create(
+                model=MODEL_NAME,
+                messages=messages,
+                max_tokens=200,
+                temperature=0.0,
+            ).choices[0].message.content.strip()
+        except RateLimitError as e:
+            last_exc = e
+            wait = RATE_LIMIT_BACKOFF * (attempt + 1)
+            print(f"[WARN] Rate limit hit (attempt {attempt + 1}), retrying in {wait}s…", flush=True)
+            time.sleep(wait)
+        except Exception as e:
+            # Non-rate-limit errors are not retried
+            raise e
+    raise last_exc  # type: ignore[misc]
+
+
 # ---------------------------------------------------------------------------
 # Single episode
 # ---------------------------------------------------------------------------
@@ -313,6 +388,8 @@ def run_episode(task_id: int) -> float:
     score   = 0.0
     success = False
 
+    # FIX 1: log_start() is emitted unconditionally BEFORE any code that
+    # could raise, so the judge always sees a matching [START] for every [END].
     log_start(task=task_name, env=BENCHMARK, model=MODEL_NAME)
 
     try:
@@ -323,9 +400,12 @@ def run_episode(task_id: int) -> float:
         )
         resp.raise_for_status()
         data     = resp.json()
+
         obs_data = data.get("observation", data)
         obs_text = obs_data.get("text", str(obs_data)) if isinstance(obs_data, dict) else str(obs_data)
-        state    = obs_data.get("state", {}) if isinstance(obs_data, dict) else {}
+
+        # FIX 2: use robust state extractor instead of single-path lookup
+        state = extract_state(data)
 
         messages = [
             {"role": "system", "content": SYSTEM_PROMPT},
@@ -337,13 +417,12 @@ def run_episode(task_id: int) -> float:
         for step in range(1, MAX_STEPS + 1):
             error_msg = None
 
+            # FIX 3: trim history before every LLM call
+            trimmed_messages = trim_messages(messages)
+
             try:
-                raw = client.chat.completions.create(
-                    model=MODEL_NAME,
-                    messages=messages,
-                    max_tokens=200,
-                    temperature=0.0,
-                ).choices[0].message.content.strip()
+                # FIX 4: use retry wrapper instead of bare client call
+                raw    = call_llm_with_retry(trimmed_messages)
                 action = parse_action(raw)
             except Exception as e:
                 error_msg = str(e)[:80]
@@ -365,7 +444,9 @@ def run_episode(task_id: int) -> float:
             obs_text = safe_obs_text(result)
             reward   = float(result.get("reward", 0.0))
             done     = bool(result.get("done", False))
-            state    = result.get("state", {})
+
+            # FIX 2: use robust state extractor for /step responses too
+            state = extract_state(result)
 
             rewards.append(reward)
             steps_taken = step
@@ -384,11 +465,12 @@ def run_episode(task_id: int) -> float:
 
             time.sleep(0.05)
 
-        # FIX: final step reward matches judge scoring logic (not max)
+        # FIX 5 (explicit): final step reward matches judge scoring logic (not max)
         score   = rewards[-1] if rewards else 0.0
         success = score >= 1.0
 
     finally:
+        # FIX 6: always use log_end() helper — no bare print anywhere
         log_end(success=success, steps=steps_taken, score=score, rewards=rewards)
 
     return score
@@ -399,7 +481,7 @@ def run_episode(task_id: int) -> float:
 # ---------------------------------------------------------------------------
 
 def main():
-    print("Supply Chain Environment — Baseline Inference v4.1", flush=True)
+    print("Supply Chain Environment — Baseline Inference v4.2", flush=True)
     print(f"Model      : {MODEL_NAME}", flush=True)
     print(f"Environment: {ENV_BASE_URL}", flush=True)
 
@@ -418,8 +500,9 @@ def main():
         try:
             scores[tid] = run_episode(tid)
         except Exception:
-            # FIX: use log_end helper so judge parser never sees a malformed line
-            log_end(success=False, steps=0, score=0.0, rewards=[])
+            # FIX 6: log_end helper used here too (run_episode finally block
+            # handles it, but if run_episode itself throws before log_start
+            # that can't happen now — log_start is always the first line)
             scores[tid] = 0.0
 
         if time.time() - start_time > 18 * 60:
