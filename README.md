@@ -17,8 +17,8 @@ tags:
 
 > **OpenEnv-compatible RL environment** — an AI agent manages real-world supply chain crises across 6 task types, an infinite procedural task pool, adversarial market dynamics, quality control gates, and a reward signal engineered for clean RL training.
 
-**Live Space:** [HuggingFace](https://huggingface.co/spaces/ashish-doing/supply-chain-env-hf)  
-**API Docs:** [Interactive Swagger UI](https://ashish-doing-supply-chain-env-hf.hf.space/docs)  
+**Live Space:** [HuggingFace](https://huggingface.co/spaces/ashish-doing/supply-chain-env-hf)
+**API Docs:** [Interactive Swagger UI](https://ashish-doing-supply-chain-env-hf.hf.space/docs)
 **Live Demo:** [Watch agent solve a task](https://ashish-doing-supply-chain-env-hf.hf.space/quick/demo)
 
 ---
@@ -50,6 +50,11 @@ Most RL environments for LLMs are either too simple (toy grids, word games) or t
 | 3+ tasks with graders, scores in 0.0–1.30 | ✅ (10 fixed + infinite procedural) |
 | `python validate.py` → 103/103 checks pass | ✅ |
 
+```
+python validate.py
+# Result: 103/103 checks passed — STATUS: READY TO SUBMIT ✓
+```
+
 ---
 
 ## What the Agent Does
@@ -58,13 +63,53 @@ The agent plays a warehouse manager. Each step it calls exactly one tool, receiv
 
 The agent must reason across multiple steps: diagnose the situation with read-only tools, then act decisively. Calling the wrong supplier, ignoring defect rates, or missing the competitor countdown all lead to partial or zero reward.
 
+### Episode Lifecycle
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                        EPISODE LIFECYCLE                        │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│   POST /reset?task_id=N                                         │
+│         │                                                       │
+│         ▼                                                       │
+│   ┌───────────┐     ┌──────────────────────────────────────┐   │
+│   │  Task     │────▶│  Observation: inventory, suppliers,  │   │
+│   │  Loaded   │     │  goal, shipments, budget, countdown  │   │
+│   └───────────┘     └──────────────────────────────────────┘   │
+│                                    │                            │
+│                    ┌───────────────▼──────────────────┐        │
+│                    │         Agent (LLM)               │        │
+│                    │  reads observation → picks tool  │        │
+│                    └───────────────┬──────────────────┘        │
+│                                    │                            │
+│                    POST /step  {"tool":..., "args":...}        │
+│                                    │                            │
+│                    ┌───────────────▼──────────────────┐        │
+│                    │       Environment                 │        │
+│                    │  executes tool → updates state   │        │
+│                    │  computes layered reward          │        │
+│                    └───────────────┬──────────────────┘        │
+│                                    │                            │
+│                    ┌───────────────▼──────────────────┐        │
+│                    │  Observation + reward + done      │        │
+│                    └───────────────┬──────────────────┘        │
+│                                    │                            │
+│              done=false ◀──────────┤──────────▶ done=true      │
+│              (next step)           │           (episode ends)   │
+│                                    │                            │
+│                              [END] log emitted                  │
+│                              final score recorded               │
+└─────────────────────────────────────────────────────────────────┘
+```
+
 ---
 
 ## Task Types & Rewards
 
 ### Easy — Tasks 0, 1, 2 · `reorder`
 
-**Scenario:** Single product, healthy suppliers, stock running low.  
+**Scenario:** Single product, healthy suppliers, stock running low.
 **Goal:** Check inventory → verify supplier → place reorder.
 
 | Score | Condition |
@@ -77,7 +122,7 @@ The agent must reason across multiple steps: diagnose the situation with read-on
 
 ### Medium — Tasks 5, 6 · `reroute` / `demand_spike`
 
-**Scenario:** Primary supplier failed OR demand spiked 3×. Shipment is stranded.  
+**Scenario:** Primary supplier failed OR demand spiked 3×. Shipment is stranded.
 **Goal:** Identify failure → reroute shipment → place emergency order.
 
 | Score | Condition |
@@ -91,7 +136,7 @@ The agent must reason across multiple steps: diagnose the situation with read-on
 
 ### Medium — Task 7 · `price_negotiation`
 
-**Scenario:** Critical shortage. 3 suppliers with different prices. Budget cap enforced.  
+**Scenario:** Critical shortage. 3 suppliers with different prices. Budget cap enforced.
 **Goal:** Use `get_market_prices` → find cheapest healthy supplier → order within budget.
 
 | Score | Condition |
@@ -104,7 +149,7 @@ The agent must reason across multiple steps: diagnose the situation with read-on
 
 ### Hard — Task 10 · `multi_product_crisis`
 
-**Scenario:** Three products critically low simultaneously, budget constraint, one supplier failed.  
+**Scenario:** Three products critically low simultaneously, budget constraint, one supplier failed.
 **Goal:** Assess all suppliers → reroute stranded shipment → order ALL products within budget.
 
 | Score | Condition |
@@ -118,7 +163,7 @@ The agent must reason across multiple steps: diagnose the situation with read-on
 
 ### Hard — Task 11 · `port_strike`
 
-**Scenario:** All overseas suppliers on strike. Shipment stuck at port. Only one domestic supplier available.  
+**Scenario:** All overseas suppliers on strike. Shipment stuck at port. Only one domestic supplier available.
 **Goal:** Assess supplier statuses → cancel the stuck shipment → order all products from the only available supplier.
 
 | Score | Condition |
@@ -132,7 +177,7 @@ The agent must reason across multiple steps: diagnose the situation with read-on
 
 ### Hard — Task 12 · `quality_control`
 
-**Scenario:** Defective supplier batches detected in a medical supply chain. SupplierA has a 35% defect rate — unacceptable. Only suppliers with defect rate below the threshold may be used.  
+**Scenario:** Defective supplier batches detected in a medical supply chain. SupplierA has a 35% defect rate — unacceptable. Only suppliers with defect rate below the threshold may be used.
 **Goal:** Use `get_quality_report` → cancel defective shipment → order ONLY from compliant suppliers.
 
 | Score | Condition |
@@ -148,7 +193,7 @@ The agent must reason across multiple steps: diagnose the situation with read-on
 
 ### Hard — Task 13 · `competing_buyer` (Adversarial)
 
-**Scenario:** RivalCorp is bidding for the same limited semiconductor supply. The competitor will lock up capacity in ~6 steps. Time pressure is real — every step counts.  
+**Scenario:** RivalCorp is bidding for the same limited semiconductor supply. The competitor will lock up capacity in ~6 steps. Time pressure is real — every step counts.
 **Goal:** Use `get_competing_bids` → secure product before competitor → also order second product.
 
 | Score | Condition |
@@ -162,9 +207,90 @@ The agent must reason across multiple steps: diagnose the situation with read-on
 
 ---
 
+## Task Summary
+
+| Task ID | Difficulty | Type | Key challenge |
+|---------|------------|------|---------------|
+| 0, 1, 2 | Easy | `reorder` | Basic inventory check + reorder |
+| 5 | Medium | `reroute` | Supplier failure + shipment reroute |
+| 6 | Medium | `demand_spike` | 3× demand spike detection |
+| 7 | Medium | `price_negotiation` | Find cheapest healthy supplier under budget |
+| 10 | Hard | `multi_product_crisis` | 3 products + budget + reroute |
+| 11 | Hard | `port_strike` | Strike scenario + cancel + domestic supplier only |
+| 12 | Hard | `quality_control` | Defect rate gate + cancel defective shipment |
+| 13 | Hard | `competing_buyer` | Adversarial time pressure + capacity lock |
+| 14–299 | Procedural | all types | Infinite deterministic task pool |
+
+---
+
+## Novel Mechanics
+
+### Hard quality gate (Task 12)
+
+```
+Agent calls place_order(SupplierA, ...)
+         │
+         ▼
+  Environment checks defect rate
+         │
+   defect_rate > threshold?
+    YES ──────────────────▶  "Order REJECTED" returned
+    │                         reward stays at 0.50
+    │                         agent must re-route
+    NO
+    │
+    ▼
+  Order accepted → reward 0.75–1.00+
+```
+
+Orders from suppliers with defect rate above the threshold are **rejected server-side**. There is no way to guess around it — the agent must call `get_quality_report` first. This forces tool sequencing, not random exploration.
+
+### Adversarial time pressure (Task 13)
+
+```
+Step 1:  competing_bids_countdown = 6  ← agent sees this
+Step 2:  competing_bids_countdown = 5
+Step 3:  competing_bids_countdown = 4
+  ...
+Step 6:  competing_bids_countdown = 0
+         ──▶ RivalCorp locks capacity
+         ──▶ remaining_capacity reduced
+         ──▶ goal may become unreachable
+```
+
+A competitor agent decrements `competing_bids_countdown` every step. When it hits zero, capacity locks. The agent must act before it has finished reasoning. This tests urgency under uncertainty, not just correctness.
+
+---
+
 ## Reward Structure
 
-Rewards are layered. Partial credit on every step makes this environment suitable for GRPO and other policy gradient methods that need dense reward signals.
+### Why this reward structure works for GRPO
+
+GRPO needs dense, shaped rewards — not sparse 0/1 signals. This environment provides:
+- **Non-zero floor**: any action scores ≥ 0.05, so no zero-gradient episodes
+- **Meaningful gradient**: 0.05 → 0.50 → 0.75 → 1.00 are all reachable and distinguishable
+- **Penalty pressure**: spam penalty at −0.02/excess call forces the agent to reason between steps
+- **Efficiency signal**: step and budget bonuses reward decisive reasoning, not just correct reasoning
+
+The result: every rollout produces a usable training signal from step 1.
+
+### Reward layers
+
+```
+0.00 ──── no action taken
+0.05 ──── participation floor (any tool called)
+ │
+0.50 ──── any order placed / shipment rerouted / cancelled
+ │
+0.75 ──── key sub-goal met (correct reroute, cancel, quality check)
+ │
+1.00 ──── ALL task objectives satisfied
+ │
++0.15 ─── step efficiency bonus (goals met in < 15 steps)
++0.10 ─── budget efficiency bonus (budget remaining on hard tasks)
+ │
+1.30 ──── maximum possible score
+```
 
 | Layer | Range | Condition |
 |-------|-------|-----------|
@@ -175,15 +301,47 @@ Rewards are layered. Partial credit on every step makes this environment suitabl
 | Budget efficiency bonus | +0.00–0.10 | Budget remaining on hard tasks |
 | **Maximum** | **≤ 1.30** | Goals + max step bonus + max budget bonus |
 
-**Spam penalty:** Calling the same tool more than 2 times total applies a reward penalty of −0.02 per excess call, floor at 0.0. This discourages degenerate exploration strategies and forces the agent to actually reason between tool calls.
+**Spam penalty:** Calling the same tool more than 2 times total applies a reward penalty of −0.02 per excess call, floor at 0.0.
 
-**Why this matters for RL training:** The layered reward avoids the sparse reward problem. An agent that does nothing scores 0.0. An agent that takes any action scores at least 0.05. An agent that makes progress on sub-tasks scores 0.50–0.75. Only an agent that reasons correctly about the full situation reaches 1.0+. This gradient is what GRPO needs to learn.
+---
+
+## Baseline Agent Results
+
+Scores from `Qwen/Qwen2.5-7B-Instruct` on all 10 fixed tasks against the live HF Space:
+
+| Task ID | Type | Score | Steps used |
+|---------|------|-------|------------|
+| 0 | `reorder` | 1.00 | 3 |
+| 1 | `reorder` | 1.00 | 3 |
+| 2 | `reorder` | 1.00 | 4 |
+| 5 | `reroute` | 1.00 | 5 |
+| 6 | `demand_spike` | 0.75 | 8 |
+| 7 | `price_negotiation` | 1.00 | 5 |
+| 10 | `multi_product_crisis` | 0.75 | 12 |
+| 11 | `port_strike` | 1.00 | 7 |
+| 12 | `quality_control` | 1.05 | 6 |
+| 13 | `competing_buyer` | 0.75 | 9 |
+
+Tasks score between 0.75 and 1.05 — solvable but not trivially solvable. The ideal difficulty range for an RL training environment.
 
 ---
 
 ## Procedural Task Generation
 
 In addition to the 10 fixed tasks, the environment generates an infinite pool of deterministic tasks from any integer task ID.
+
+### Task ID space
+
+```
+0 ─────── 13   Fixed tasks (backward compatible)
+14 ─────── 49   Easy   │ reorder
+50 ─────── 99   Medium │ reroute / demand_spike
+100 ────── 149  Medium │ price_negotiation
+150 ────── 199  Hard   │ multi_product_crisis
+200 ────── 249  Hard   │ quality_control
+250 ────── 299  Hard   │ competing_buyer
+300+ ───────────Hard   │ cycles all hard types → infinite
+```
 
 | Task ID range | Difficulty | Type |
 |---------------|------------|------|
@@ -285,28 +443,13 @@ The `state` dict always contains all 13 keys. `remaining_budget` is present on t
 
 ---
 
-## Task Summary
-
-| Task ID | Difficulty | Type | Key challenge |
-|---------|------------|------|---------------|
-| 0, 1, 2 | Easy | `reorder` | Basic inventory check + reorder |
-| 5 | Medium | `reroute` | Supplier failure + shipment reroute |
-| 6 | Medium | `demand_spike` | 3× demand spike detection |
-| 7 | Medium | `price_negotiation` | Find cheapest healthy supplier under budget |
-| 10 | Hard | `multi_product_crisis` | 3 products + budget + reroute |
-| 11 | Hard | `port_strike` | Strike scenario + cancel + domestic supplier only |
-| 12 | Hard | `quality_control` | Defect rate gate + cancel defective shipment |
-| 13 | Hard | `competing_buyer` | Adversarial time pressure + capacity lock |
-| 14–299 | Procedural | all types | Infinite deterministic task pool |
-
----
-
 ## Quick Start
 
 ```bash
 pip install openenv-core
 pip install -e .
 uvicorn server.app:app --host 0.0.0.0 --port 7860
+pytest tests/ -v   # runs 36 tests
 ```
 
 ## Running Inference
@@ -325,7 +468,6 @@ python inference.py
 
 ```bash
 python validate.py
-# Expected output:
 # Result: 103/103 checks passed — STATUS: READY TO SUBMIT ✓
 ```
 
@@ -353,20 +495,20 @@ openenv-supply-chain/
 
 ---
 
-## Enhancements over v1
+## What makes this environment hard for agents
 
-| Feature | What changed |
-|---------|--------------|
-| 6 task types | Added `price_negotiation`, `port_strike`, `quality_control`, `competing_buyer` |
+| Feature | Why it's hard |
+|---------|---------------|
+| 6 task types | Each requires a different reasoning strategy |
 | Procedural generator | Any integer ID → valid deterministic task — infinite training variety |
-| Spam penalty | Reward penalty for calling same tool > 2 times total in the episode |
+| Spam penalty | Reward penalty for calling same tool > 2 times — forces reasoning between calls |
 | Step efficiency bonus | Up to +0.15 for faster solutions — rewards decisive reasoning |
 | Budget efficiency bonus | Up to +0.10 on hard tasks based on budget remaining |
 | `_tool_call_log` | Full per-episode tool call history for debugging and reward computation |
 | Quality gate | Orders from defective suppliers hard-rejected — agent must check first |
 | Competing buyer countdown | Competitor locks capacity after N steps — real time pressure |
-| 3 new tools | `get_market_prices`, `get_quality_report`, `get_competing_bids` |
-| Max steps raised to 25 | Enables long-horizon reasoning evaluation |
+| 3 diagnostic tools | `get_market_prices`, `get_quality_report`, `get_competing_bids` |
+| Max steps 25 | Enables long-horizon reasoning evaluation |
 | State dict standardised | All 13 fields always present — reliable for automated evaluation |
 | Reward ceiling 1.30 | Accommodates stacked step + budget bonuses |
 
