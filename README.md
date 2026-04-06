@@ -66,41 +66,42 @@ The agent must reason across multiple steps: diagnose the situation with read-on
 ### Episode Lifecycle
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                        EPISODE LIFECYCLE                        │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                 │
-│   POST /reset?task_id=N                                         │
-│         │                                                       │
-│         ▼                                                       │
-│   ┌───────────┐     ┌──────────────────────────────────────┐   │
-│   │  Task     │────▶│  Observation: inventory, suppliers,  │   │
-│   │  Loaded   │     │  goal, shipments, budget, countdown  │   │
-│   └───────────┘     └──────────────────────────────────────┘   │
-│                                    │                            │
-│                    ┌───────────────▼──────────────────┐        │
-│                    │         Agent (LLM)               │        │
-│                    │  reads observation → picks tool  │        │
-│                    └───────────────┬──────────────────┘        │
-│                                    │                            │
-│                    POST /step  {"tool":..., "args":...}        │
-│                                    │                            │
-│                    ┌───────────────▼──────────────────┐        │
-│                    │       Environment                 │        │
-│                    │  executes tool → updates state   │        │
-│                    │  computes layered reward          │        │
-│                    └───────────────┬──────────────────┘        │
-│                                    │                            │
-│                    ┌───────────────▼──────────────────┐        │
-│                    │  Observation + reward + done      │        │
-│                    └───────────────┬──────────────────┘        │
-│                                    │                            │
-│              done=false ◀──────────┤──────────▶ done=true      │
-│              (next step)           │           (episode ends)   │
-│                                    │                            │
-│                              [END] log emitted                  │
-│                              final score recorded               │
-└─────────────────────────────────────────────────────────────────┘
++----------------------------------------------------------+
+|                    EPISODE LIFECYCLE                     |
++----------------------------------------------------------+
+|                                                          |
+|  POST /reset?task_id=N                                   |
+|        |                                                 |
+|        v                                                 |
+|  +------------+     +--------------------------------+   |
+|  | Task       |---->| Observation: inventory,        |   |
+|  | Loaded     |     | suppliers, goal, shipments,    |   |
+|  +------------+     | budget, countdown              |   |
+|                     +--------------------------------+   |
+|                                |                         |
+|                     +----------v--------------------+    |
+|                     | Agent (LLM)                   |    |
+|                     | reads observation, picks tool |    |
+|                     +----------+--------------------+    |
+|                                |                         |
+|            POST /step  {"tool":..., "args":...}         |
+|                                |                         |
+|                     +----------v--------------------+    |
+|                     | Environment                   |    |
+|                     | executes tool, updates state  |    |
+|                     | computes layered reward       |    |
+|                     +----------+--------------------+    |
+|                                |                         |
+|                     +----------v--------------------+    |
+|                     | Observation + reward + done   |    |
+|                     +----------+--------------------+    |
+|                                |                         |
+|        done=false <------------+-----------> done=true  |
+|        (next step)                         (episode ends)|
+|                                                          |
+|                   [END] log emitted                      |
+|                   final score recorded                   |
++----------------------------------------------------------+
 ```
 
 ---
@@ -229,18 +230,18 @@ The agent must reason across multiple steps: diagnose the situation with read-on
 
 ```
 Agent calls place_order(SupplierA, ...)
-         │
-         ▼
+         |
+         v
   Environment checks defect rate
-         │
+         |
    defect_rate > threshold?
-    YES ──────────────────▶  "Order REJECTED" returned
-    │                         reward stays at 0.50
-    │                         agent must re-route
+    YES ─────────────────> "Order REJECTED" returned
+    |                       reward stays at 0.50
+    |                       agent must re-route
     NO
-    │
-    ▼
-  Order accepted → reward 0.75–1.00+
+    |
+    v
+  Order accepted -> reward 0.75-1.00+
 ```
 
 Orders from suppliers with defect rate above the threshold are **rejected server-side**. There is no way to guess around it — the agent must call `get_quality_report` first. This forces tool sequencing, not random exploration.
@@ -248,14 +249,14 @@ Orders from suppliers with defect rate above the threshold are **rejected server
 ### Adversarial time pressure (Task 13)
 
 ```
-Step 1:  competing_bids_countdown = 6  ← agent sees this
+Step 1:  competing_bids_countdown = 6  <- agent sees this
 Step 2:  competing_bids_countdown = 5
 Step 3:  competing_bids_countdown = 4
   ...
 Step 6:  competing_bids_countdown = 0
-         ──▶ RivalCorp locks capacity
-         ──▶ remaining_capacity reduced
-         ──▶ goal may become unreachable
+         --> RivalCorp locks capacity
+         --> remaining_capacity reduced
+         --> goal may become unreachable
 ```
 
 A competitor agent decrements `competing_bids_countdown` every step. When it hits zero, capacity locks. The agent must act before it has finished reasoning. This tests urgency under uncertainty, not just correctness.
@@ -277,19 +278,19 @@ The result: every rollout produces a usable training signal from step 1.
 ### Reward layers
 
 ```
-0.00 ──── no action taken
-0.05 ──── participation floor (any tool called)
- │
-0.50 ──── any order placed / shipment rerouted / cancelled
- │
-0.75 ──── key sub-goal met (correct reroute, cancel, quality check)
- │
-1.00 ──── ALL task objectives satisfied
- │
-+0.15 ─── step efficiency bonus (goals met in < 15 steps)
-+0.10 ─── budget efficiency bonus (budget remaining on hard tasks)
- │
-1.30 ──── maximum possible score
+0.00  ---- no action taken
+0.05  ---- participation floor (any tool called)
+  |
+0.50  ---- any order placed / shipment rerouted / cancelled
+  |
+0.75  ---- key sub-goal met (correct reroute, cancel, quality check)
+  |
+1.00  ---- ALL task objectives satisfied
+  |
++0.15 ---- step efficiency bonus (goals met in < 15 steps)
++0.10 ---- budget efficiency bonus (budget remaining on hard tasks)
+  |
+1.30  ---- maximum possible score
 ```
 
 | Layer | Range | Condition |
@@ -333,14 +334,14 @@ In addition to the 10 fixed tasks, the environment generates an infinite pool of
 ### Task ID space
 
 ```
-0 ─────── 13   Fixed tasks (backward compatible)
-14 ─────── 49   Easy   │ reorder
-50 ─────── 99   Medium │ reroute / demand_spike
-100 ────── 149  Medium │ price_negotiation
-150 ────── 199  Hard   │ multi_product_crisis
-200 ────── 249  Hard   │ quality_control
-250 ────── 299  Hard   │ competing_buyer
-300+ ───────────Hard   │ cycles all hard types → infinite
+0   ------  13   Fixed tasks (backward compatible)
+14  ------  49   Easy   | reorder
+50  ------  99   Medium | reroute / demand_spike
+100 ------ 149   Medium | price_negotiation
+150 ------ 199   Hard   | multi_product_crisis
+200 ------ 249   Hard   | quality_control
+250 ------ 299   Hard   | competing_buyer
+300+       inf   Hard   | cycles all hard types -> infinite
 ```
 
 | Task ID range | Difficulty | Type |
