@@ -4,6 +4,7 @@ version: "4.3.0"
 type: space
 runtime: fastapi
 app: server.app:app
+entrypoint: server.app:main
 port: 7860
 
 action_type: SupplyChainAction
