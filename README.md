@@ -235,7 +235,7 @@ Agent calls place_order(SupplierA, ...)
   Environment checks defect rate
          |
    defect_rate > threshold?
-    YES ─────────────────> "Order REJECTED" returned
+    YES ──────────────────> "Order REJECTED" returned
     |                       reward stays at 0.50
     |                       agent must re-route
     NO
@@ -358,7 +358,7 @@ In addition to the 10 fixed tasks, the environment generates an infinite pool of
 **Determinism guarantee:** `generate_task(task_id)` always returns the same task for the same ID. The RNG seed is the task_id itself — training runs are fully reproducible.
 
 ```python
-from generate_tasks import generate_task
+from supply_chain_env.generate_tasks import generate_task
 
 task_a = generate_task(175)   # hard multi_product_crisis, always identical
 task_b = generate_task(42)    # easy reorder, always identical
@@ -447,9 +447,23 @@ The `state` dict always contains all 13 keys. `remaining_budget` is present on t
 ## Quick Start
 
 ```bash
-pip install openenv-core
-pip install -e .
-uvicorn server.app:app --host 0.0.0.0 --port 7860
+# Clone the repo
+git clone https://github.com/ashish-doing/openenv-supply-chain.git
+cd openenv-supply-chain
+
+# Install uv if you don't have it
+pip install uv
+
+# Create venv and install dependencies
+uv venv
+uv pip install -e . --link-mode=copy
+
+# Run the server
+uv run server
+# Server starts at http://localhost:7860
+# Swagger UI at http://localhost:7860/docs
+
+# Run tests
 pytest tests/ -v   # runs 36 tests
 ```
 
@@ -478,20 +492,23 @@ python validate.py
 
 ```
 openenv-supply-chain/
-├── server/
-│   ├── app.py                          # FastAPI server — OpenEnv endpoints
-│   └── supply_chain_env_environment.py # Environment logic (all 6 task types)
+├── supply_chain_env/                       # Python package (importable)
+│   ├── __init__.py
+│   ├── models.py                           # Pydantic typed models (Action, Observation, State)
+│   ├── generate_tasks.py                   # Procedural task generator (fixed + infinite pool)
+│   └── server/
+│       ├── __init__.py
+│       ├── app.py                          # FastAPI server — OpenEnv endpoints
+│       └── supply_chain_env_environment.py # Environment logic (all 6 task types)
 ├── tests/
 │   ├── __init__.py
-│   └── test_environment.py             # pytest suite (36 tests)
-├── generate_tasks.py                   # Procedural task generator (fixed + infinite pool)
-├── models.py                           # Pydantic typed models (Action, Observation, State)
-├── client.py                           # Python client for training code
-├── inference.py                        # Baseline LLM agent — emits [START]/[STEP]/[END] logs
-├── validate.py                         # Pre-submission validator (103 checks)
-├── openenv.yaml                        # OpenEnv spec config
-├── Dockerfile                          # Container definition
-└── pyproject.toml                      # Package config
+│   └── test_environment.py                 # pytest suite (36 tests)
+├── client.py                               # Python client for training code
+├── inference.py                            # Baseline LLM agent — emits [START]/[STEP]/[END] logs
+├── validate.py                             # Pre-submission validator (103 checks)
+├── openenv.yaml                            # OpenEnv spec config
+├── Dockerfile                              # Container definition
+└── pyproject.toml                          # Package config (entry point: uv run server)
 ```
 
 ---
@@ -518,6 +535,7 @@ openenv-supply-chain/
 ## Changelog
 
 ### v4 (current)
+- Restructured into proper Python package (`supply_chain_env/`) for clean installs via `uv run server`.
 - Corrected task ID mapping in validator (sections 8–11).
 - Procedural task generator: any integer task ID now produces a valid deterministic task.
 - Added `_tool_call_log`, spam penalty, step efficiency bonus, and budget efficiency bonus.
