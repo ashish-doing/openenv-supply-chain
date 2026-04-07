@@ -50,14 +50,8 @@ server = "supply_chain_env.server.app:main"
 include-package-data = true
 
 [tool.setuptools.packages.find]
-# Auto-discover supply_chain_env and supply_chain_env.server
 where = ["."]
-include = ["supply_chain_env*", "server*"]
-
-[tool.setuptools.package-dir]
-# Root package maps to current directory
-"supply_chain_env" = "."
-"supply_chain_env.server" = "server"
+include = ["supply_chain_env*"]
 
 [tool.setuptools.package-data]
 "*" = ["openenv.yaml", "*.md", "*.json", "*.yaml", "*.yml"]
