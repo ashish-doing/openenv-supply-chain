@@ -17,9 +17,7 @@ tags:
 
 > **OpenEnv-compatible RL environment** — an AI agent manages real-world supply chain crises across 6 task types, an infinite procedural task pool, adversarial market dynamics, quality control gates, and a reward signal engineered for clean RL training.
 
-**Live Space:** [HuggingFace](https://huggingface.co/spaces/ashish-doing/supply-chain-env-hf)
-**API Docs:** [Interactive Swagger UI](https://ashish-doing-supply-chain-env-hf.hf.space/docs)
-**Live Demo:** [Watch agent solve a task](https://ashish-doing-supply-chain-env-hf.hf.space/quick/demo)
+**Live Space:** [HuggingFace](https://huggingface.co/spaces/ashish-doing/supply-chain-env-hf) | **API Docs:** [Interactive Swagger UI](https://ashish-doing-supply-chain-env-hf.hf.space/docs) | **Live Demo:** [Watch agent solve a task](https://ashish-doing-supply-chain-env-hf.hf.space/quick/demo)
 
 ---
 
@@ -52,7 +50,7 @@ Most RL environments for LLMs are either too simple (toy grids, word games) or t
 
 ```
 python validate.py
-# Result: all checks passed — STATUS: READY TO SUBMIT ✓
+# Result: 118/118 checks passed — STATUS: READY TO SUBMIT ✓
 ```
 
 ---
@@ -66,42 +64,42 @@ The agent must reason across multiple steps: diagnose the situation with read-on
 ### Episode Lifecycle
 
 ```
-+----------------------------------------------------------+
-|                    EPISODE LIFECYCLE                     |
-+----------------------------------------------------------+
-|                                                          |
-|  POST /reset?task_id=N                                   |
-|        |                                                 |
-|        v                                                 |
-|  +------------+     +--------------------------------+   |
-|  | Task       |---->| Observation: inventory,        |   |
-|  | Loaded     |     | suppliers, goal, shipments,    |   |
-|  +------------+     | budget, countdown              |   |
-|                     +--------------------------------+   |
-|                                |                         |
-|                     +----------v--------------------+    |
-|                     | Agent (LLM)                   |    |
-|                     | reads observation, picks tool |    |
-|                     +----------+--------------------+    |
-|                                |                         |
-|            POST /step  {"tool":..., "args":...}         |
-|                                |                         |
-|                     +----------v--------------------+    |
-|                     | Environment                   |    |
-|                     | executes tool, updates state  |    |
-|                     | computes layered reward       |    |
-|                     +----------+--------------------+    |
-|                                |                         |
-|                     +----------v--------------------+    |
-|                     | Observation + reward + done   |    |
-|                     +----------+--------------------+    |
-|                                |                         |
-|        done=false <------------+-----------> done=true  |
-|        (next step)                         (episode ends)|
-|                                                          |
-|                   [END] log emitted                      |
-|                   final score recorded                   |
-+----------------------------------------------------------+
++------------------------------------------------------------+
+|                     EPISODE LIFECYCLE                      |
++------------------------------------------------------------+
+|                                                            |
+|  POST /reset?task_id=N                                     |
+|        |                                                   |
+|        v                                                   |
+|  +------------+     +----------------------------------+   |
+|  |    Task    |---->| Observation: inventory,          |   |
+|  |   Loaded   |     | suppliers, goal, shipments,      |   |
+|  +------------+     | budget, countdown                |   |
+|                     +----------------------------------+   |
+|                                  |                         |
+|                     +------------v------------------+      |
+|                     |        Agent (LLM)            |      |
+|                     | reads observation, picks tool |      |
+|                     +------------+------------------+      |
+|                                  |                         |
+|              POST /step  {"tool":..., "args":...}          |
+|                                  |                         |
+|                     +------------v------------------+      |
+|                     |       Environment             |      |
+|                     | executes tool, updates state  |      |
+|                     | computes layered reward       |      |
+|                     +------------+------------------+      |
+|                                  |                         |
+|                     +------------v------------------+      |
+|                     | Observation + reward + done   |      |
+|                     +------------+------------------+      |
+|                                  |                         |
+|       done=false <---------------+----------> done=true    |
+|       (next step)                           (episode ends) |
+|                                                            |
+|                    [END] log emitted                       |
+|                    final score recorded                    |
++------------------------------------------------------------+
 ```
 
 ---
@@ -111,7 +109,9 @@ The agent must reason across multiple steps: diagnose the situation with read-on
 ### Easy — Tasks 0, 1, 2 · `reorder`
 
 **Scenario:** Single product, healthy suppliers, stock running low.
-**Goal:** Check inventory → verify supplier → place reorder.
+
+**Goal:**
+Check inventory → verify supplier → place reorder.
 
 | Score | Condition |
 |-------|-----------|
@@ -124,7 +124,9 @@ The agent must reason across multiple steps: diagnose the situation with read-on
 ### Medium — Tasks 5, 6 · `reroute` / `demand_spike`
 
 **Scenario:** Primary supplier failed OR demand spiked 3×. Shipment is stranded.
-**Goal:** Identify failure → reroute shipment → place emergency order.
+
+**Goal:**
+Identify failure → reroute shipment → place emergency order.
 
 | Score | Condition |
 |-------|-----------|
@@ -138,7 +140,9 @@ The agent must reason across multiple steps: diagnose the situation with read-on
 ### Medium — Task 7 · `price_negotiation`
 
 **Scenario:** Critical shortage. 3 suppliers with different prices. Budget cap enforced.
-**Goal:** Use `get_market_prices` → find cheapest healthy supplier → order within budget.
+
+**Goal:**
+Use `get_market_prices` → find cheapest healthy supplier → order within budget.
 
 | Score | Condition |
 |-------|-----------|
@@ -151,7 +155,9 @@ The agent must reason across multiple steps: diagnose the situation with read-on
 ### Hard — Task 10 · `multi_product_crisis`
 
 **Scenario:** Three products critically low simultaneously, budget constraint, one supplier failed.
-**Goal:** Assess all suppliers → reroute stranded shipment → order ALL products within budget.
+
+**Goal:**
+Assess all suppliers → reroute stranded shipment → order ALL products within budget.
 
 | Score | Condition |
 |-------|-----------|
@@ -165,7 +171,9 @@ The agent must reason across multiple steps: diagnose the situation with read-on
 ### Hard — Task 11 · `port_strike`
 
 **Scenario:** All overseas suppliers on strike. Shipment stuck at port. Only one domestic supplier available.
-**Goal:** Assess supplier statuses → cancel the stuck shipment → order all products from the only available supplier.
+
+**Goal:**
+Assess supplier statuses → cancel the stuck shipment → order all products from the only available supplier.
 
 | Score | Condition |
 |-------|-----------|
@@ -179,7 +187,9 @@ The agent must reason across multiple steps: diagnose the situation with read-on
 ### Hard — Task 12 · `quality_control`
 
 **Scenario:** Defective supplier batches detected in a medical supply chain. SupplierA has a 35% defect rate — unacceptable. Only suppliers with defect rate below the threshold may be used.
-**Goal:** Use `get_quality_report` → cancel defective shipment → order ONLY from compliant suppliers.
+
+**Goal:**
+Use `get_quality_report` → cancel defective shipment → order ONLY from compliant suppliers.
 
 | Score | Condition |
 |-------|-----------|
@@ -195,7 +205,9 @@ The agent must reason across multiple steps: diagnose the situation with read-on
 ### Hard — Task 13 · `competing_buyer` (Adversarial)
 
 **Scenario:** RivalCorp is bidding for the same limited semiconductor supply. The competitor will lock up capacity in ~6 steps. Time pressure is real — every step counts.
-**Goal:** Use `get_competing_bids` → secure product before competitor → also order second product.
+
+**Goal:**
+Use `get_competing_bids` → secure product before competitor → also order second product.
 
 | Score | Condition |
 |-------|-----------|
@@ -475,7 +487,7 @@ python inference.py
 
 ```bash
 python validate.py
-# Result: all checks passed — STATUS: READY TO SUBMIT ✓
+# Result: 118/118 checks passed — STATUS: READY TO SUBMIT ✓
 ```
 
 ---
@@ -531,6 +543,7 @@ openenv-supply-chain/
 - `openenv.yaml` `reward_range` updated to `[0.0, 1.0]`.
 - `openenv.yaml` `app` and `entrypoint` paths corrected to
   `supply_chain_env.server.app:app` / `supply_chain_env.server.app:main`.
+- `validate.py` section 12 thresholds updated to match reward cap.
 - Version bumped to 4.4.0.
 
 ### v4.3
