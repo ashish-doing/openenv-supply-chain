@@ -38,16 +38,16 @@ check("openenv.yaml exists",            os.path.exists("openenv.yaml"))
 check("Dockerfile exists",              os.path.exists("Dockerfile"))
 check("inference.py exists",            os.path.exists("inference.py"))
 check("README.md exists",               os.path.exists("README.md"))
-check("models.py exists",               os.path.exists("models.py"))
-check("generate_tasks.py exists",       os.path.exists("generate_tasks.py"))
-check("server/app.py exists",           os.path.exists(os.path.join("server","app.py")))
-check("server/requirements.txt exists", os.path.exists(os.path.join("server","requirements.txt")))
+check("models.py exists",               os.path.exists(os.path.join("supply_chain_env", "models.py")))
+check("generate_tasks.py exists",       os.path.exists(os.path.join("supply_chain_env", "generate_tasks.py")))
+check("server/app.py exists",           os.path.exists(os.path.join("supply_chain_env", "server", "app.py")))
+check("server/requirements.txt exists", os.path.exists(os.path.join("supply_chain_env", "server", "requirements.txt")))
 
 # ── 2. Imports ────────────────────────────────────────────────────────────────
 print("\n[2] Imports")
 try:
-    from server.supply_chain_env_environment import SupplyChainEnvironment
-    from models import SupplyChainAction
+    from supply_chain_env.server.supply_chain_env_environment import SupplyChainEnvironment
+    from supply_chain_env.models import SupplyChainAction
     check("Core imports work", True)
 except Exception as e:
     check("Core imports work", False, str(e))
@@ -384,7 +384,7 @@ if HAS_REQUESTS:
                   rr2.status_code == 200, str(rr2.status_code))
     except requests.exceptions.ConnectionError:
         print(f"  [SKIP] Could not connect to {BASE_URL}")
-        print(f"         Start: uvicorn server.app:app --host 0.0.0.0 --port 7860")
+        print(f"         Start: uvicorn supply_chain_env.server.app:app --host 0.0.0.0 --port 7860")
     except Exception as e:
         check("Server endpoints", False, str(e))
 else:
