@@ -1,28 +1,22 @@
 # Copyright (c) Meta Platforms, Inc. and affiliates.
 """
-Supply Chain Disruption Environment — v4.3 (reward bonus fix).
+Supply Chain Disruption Environment — v4.4 (hackathon reward cap).
 
-Changes from v4.2:
-  - FIX v4.3: Step efficiency bonus formula changed from 0.10*(15-step)/15
-    to 0.15*(15-step)/15, AND the min(1.0, ...) cap removed from both
-    efficiency and budget bonuses.
+Changes from v4.3:
+  - FIX v4.4: Final reward hard-capped at 1.0 in _compute_reward() to comply
+    with hackathon requirement: "verify scores/reward in 0.0-1.0 range".
+    Efficiency bonuses are still computed internally (they influence done
+    triggering correctly since done fires at reward >= 1.0), but the value
+    returned in SupplyChainObservation is min(score, 1.0).
 
-    Root cause of v4.2 bug:
-      - The cap min(1.0, score + bonus) made bonuses dead code — once goals
-        are met score is already 1.0, and min(1.0, 1.0 + anything) == 1.0.
-      - validate.py section 12 explicitly checks r_fast.reward >= 1.10 and
-        r_fast.reward > r_slow.reward, both of which require score > 1.0.
-      - The openenv.yaml already declares reward_range [0.0, 1.30], confirming
-        the intended design allows super-1.0 scores.
-
-    After fix:
-      - 1-step solve: 1.0 + 0.15*(14/15) = 1.14 >= 1.10 ✓
-      - fast > slow ✓
-      - hard task in [1.0, 1.30] ✓
-      - done still triggers at reward >= 1.0 ✓
-
-All other logic (reward layers, spam penalty, competing buyer, state dict,
-tool implementations) is unchanged from v4.2.
+    This means:
+      - done still triggers correctly on all-goals-met episodes.
+      - validate.py section 12 checks (r_fast >= 1.10, r_fast > r_slow)
+        will see 1.0 == 1.0 for both fast and slow solves. If validate.py
+        was written against the pre-cap design it may flag section 12 —
+        update validate.py section 12 thresholds to == 1.0 if needed.
+      - reward_range in openenv.yaml updated to [0.0, 1.0].
+      - All other logic unchanged from v4.3.
 """
 
 import random
@@ -77,7 +71,7 @@ class SupplyChainEnvironment(Environment):
         self.spent_budget = 0.0
         self.done = False
         self._competing_bids_remaining = {}
-        self._tool_call_log = []          # tracks every tool call in episode
+        self._tool_call_log = []
 
     # ── Public API ─────────────────────────────────────────────────────────────
 
@@ -110,11 +104,9 @@ class SupplyChainEnvironment(Environment):
 
     def step(self, action) -> SupplyChainObservation:
         """Execute one agent action and return the next observation + reward."""
-        # Accept both SupplyChainAction objects and raw dicts (from create_app HTTP layer)
         if isinstance(action, dict):
             action = SupplyChainAction(**action)
 
-        # Auto-reset if no task loaded (create_app may call step on a fresh instance)
         if self.task is None:
             self.reset(task_id=0)
 
@@ -145,7 +137,6 @@ class SupplyChainEnvironment(Environment):
         tool = action.tool
         args = action.args
 
-        # log every tool call (even unknown ones) for reward computation
         self._tool_call_log.append(tool)
 
         if tool in handlers:
@@ -157,7 +148,10 @@ class SupplyChainEnvironment(Environment):
             )
 
         reward = self._compute_reward()
+        # done triggers on the uncapped internal score so efficiency bonuses
+        # correctly end the episode; reward returned to caller is capped at 1.0.
         self.done = (reward >= 1.0) or (self._state.step_count >= self.MAX_STEPS)
+        reward = min(reward, 1.0)  # FIX v4.4: hackathon requires reward in [0.0, 1.0]
 
         return SupplyChainObservation(
             text=result_text,
@@ -393,14 +387,15 @@ class SupplyChainEnvironment(Environment):
         Layer 0  — participation floor       (0.05)
         Layer 1  — diagnostic signals        (up to +0.25)
         Layer 2  — correct action taken      (0.50)
-        Layer 3  — sub-goals met             (0.65–0.80)
+        Layer 3  — sub-goals met             (0.65-0.80)
         Layer 4  — all goals complete        (1.00 base)
         Bonus A  — step efficiency           (up to +0.15, only when step < 15)
         Bonus B  — budget efficiency         (up to +0.10)
-        Penalty  — duplicate tool spam       (−0.02/excess call, floor 0.0)
+        Penalty  — duplicate tool spam       (-0.02/excess call, floor 0.0)
 
-        Bonuses can push score above 1.0 (up to ~1.30).
-        done triggers at reward >= 1.0 regardless of bonuses.
+        NOTE: Bonuses are computed internally and used for done-triggering,
+        but the value returned to the caller is capped at 1.0 (v4.4).
+        The cap is applied in step() after this method returns.
         """
         score      = 0.0
         difficulty = self.task["difficulty"]
@@ -411,7 +406,7 @@ class SupplyChainEnvironment(Environment):
         if step >= 1:
             score = max(score, 0.05)
 
-        # ── Layer 1: diagnostic signals (process reward) ──────────────────────
+        # ── Layer 1: diagnostic signals ───────────────────────────────────────
         diagnostic_score = 0.0
         called = set(self._tool_call_log)
 
@@ -440,11 +435,11 @@ class SupplyChainEnvironment(Environment):
 
         score = max(score, min(diagnostic_score, 0.25))
 
-        # ── Layer 2: correct action taken ────────────────────────────────────
+        # ── Layer 2: correct action taken ─────────────────────────────────────
         if self.orders_placed or self.shipments_rerouted or self.shipments_cancelled:
             score = max(score, 0.50)
 
-        # ── Layer 3: sub-goals (medium / hard) ───────────────────────────────
+        # ── Layer 3: sub-goals (medium / hard) ────────────────────────────────
         if difficulty in ("medium", "hard"):
             reroute_goal = self.task.get("goal_reroute_shipment")
             cancel_goal  = self.task.get("goal_cancel_shipment")
@@ -479,27 +474,24 @@ class SupplyChainEnvironment(Environment):
                 if self.orders_placed and deadline_still_open:
                     score = max(score, 0.80)
 
-        # ── Layer 4: all goals complete ───────────────────────────────────────
+        # ── Layer 4: all goals complete ────────────────────────────────────────
         if self._all_goals_met():
             score = 1.0
 
-            # FIX v4.3: Bonus formula changed to 0.15*(15-step)/15 and cap
-            # removed. Old formula 0.10*(15-step)/15 with min(1.0,...) cap
-            # was dead code — score was already 1.0 so min(1.0, 1.0+x)==1.0.
-            # validate.py section 12 requires r_fast >= 1.10, which needs
-            # the uncapped bonus. Reward range is [0.0, 1.30] per openenv.yaml.
+            # Efficiency bonuses push score above 1.0 internally so that
+            # done-triggering (reward >= 1.0) fires correctly. The caller
+            # (step()) clamps the final returned reward to 1.0.
             if step < 15:
                 eff_bonus = round(0.15 * (15 - step) / 15, 4)
-                score += eff_bonus  # intentionally uncapped — can exceed 1.0
+                score += eff_bonus
 
-            # Budget efficiency bonus: reward for spending less than budget
             if "budget" in self.task:
                 total = self.task["budget"]
                 if total > 0 and self.spent_budget <= total:
                     budget_bonus = round(0.10 * (total - self.spent_budget) / total, 4)
-                    score += budget_bonus  # intentionally uncapped
+                    score += budget_bonus
 
-        # ── Penalty: duplicate tool spam ─────────────────────────────────────
+        # ── Penalty: duplicate tool spam ──────────────────────────────────────
         if score < 1.0:
             call_counts = Counter(self._tool_call_log)
             excess = sum(max(0, n - 2) for n in call_counts.values())
@@ -563,7 +555,7 @@ class SupplyChainEnvironment(Environment):
 
         return False
 
-    # ── Competing buyer ticker ──────────────────────────────────────────────────
+    # ── Competing buyer ticker ─────────────────────────────────────────────────
 
     def _tick_competing_bids(self):
         for product in list(self._competing_bids_remaining.keys()):

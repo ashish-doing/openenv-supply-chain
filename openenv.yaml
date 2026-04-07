@@ -1,10 +1,10 @@
 spec_version: 1
 name: supply_chain_env
-version: "4.3.0"
+version: "4.4.0"
 type: space
 runtime: fastapi
-app: server.app:app
-entrypoint: server.app:main
+app: supply_chain_env.server.app:app
+entrypoint: supply_chain_env.server.app:main
 port: 7860
 
 action_type: SupplyChainAction
@@ -72,17 +72,17 @@ observation_space:
     reward:
       type: float
       description: >
-        Reward for this step. Range 0.0–1.30.
+        Reward for this step. Range 0.0-1.0.
         Layered: 0.05 (participation), up to 0.25 (diagnostics),
-        0.50 (order/reroute placed), 0.65–0.80 (sub-goals),
-        1.00+ (all goals met plus step + budget efficiency bonuses, max 1.30).
+        0.50 (order/reroute placed), 0.65-0.80 (sub-goals),
+        1.00 (all goals met).
     done:
       type: boolean
       description: True when reward >= 1.0 or max_steps (25) reached.
 
 reward_shaping:
   description: >
-    Layered reward system with efficiency bonuses and duplicate-call spam penalty.
+    Layered reward system with efficiency bonuses (applied internally) and duplicate-call spam penalty.
   layers:
     - name: participation
       value: 0.05
@@ -101,12 +101,6 @@ reward_shaping:
     - name: goals_met
       value: 1.00
       condition: all task objectives satisfied (_all_goals_met returns True)
-    - name: step_efficiency_bonus
-      range: [0.0, 0.15]
-      condition: goals met in fewer than 15 steps — adds up to 0.15 above 1.0
-    - name: budget_efficiency_bonus
-      range: [0.0, 0.10]
-      condition: goals met with budget remaining — adds up to 0.10 above 1.0
   penalties:
     - name: spam_penalty
       condition: same tool called more than 2 times total in the episode
@@ -138,7 +132,7 @@ tasks:
       - {ids: "300+",    difficulty: hard,   type: cycles_all_hard_types}
 
 max_steps: 25
-reward_range: [0.0, 1.30]
+reward_range: [0.0, 1.0]
 
 endpoints:
   - path: /reset

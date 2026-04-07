@@ -1,15 +1,17 @@
 # Copyright (c) Meta Platforms, Inc. and affiliates.
 """
-Data models for the Supply Chain Environment (v4.1).
+Data models for the Supply Chain Environment (v4.4).
 
 Defines typed Action, Observation, State, and Rubrics following the OpenEnv spec
 and RFC 004 (rubric system). All are exported from supply_chain_env.__init__.
 
-FIX v4.1:
-  - PartialCreditRubric reward_max changed from 1.30 to 1.0 (reward is capped at 1.0)
-  - SupplyChainObservation.reward docstring corrected to Range 0.0-1.0
-  - SupplyChainObservation.rubric_reward docstring corrected (process values were swapped)
-  - SupplyChainRubric default outcome uses reward_max=1.0
+FIX v4.4:
+  - reward docstring confirmed: Range 0.0-1.0 (hard capped in step()).
+    Efficiency bonuses are computed internally in _compute_reward() and used
+    to trigger done, but the value in SupplyChainObservation.reward is
+    always capped to 1.0 by step() before returning to the caller.
+  - PartialCreditRubric reward_max remains 1.0 — correct.
+  - SupplyChainRubric default outcome uses reward_max=1.0 — correct.
 """
 
 from __future__ import annotations
@@ -115,7 +117,7 @@ class SupplyChainObservation(Observation):
     Observation returned after each reset() and step().
 
     Contains a human-readable tool result, the full environment state dict,
-    the raw layered reward, the RFC-004 rubric reward, and done flag.
+    the reward (hard-capped at 1.0), and done flag.
     """
 
     text: str = Field(
@@ -131,19 +133,17 @@ class SupplyChainObservation(Observation):
     )
     done: bool = Field(
         default=False,
-        description="True when reward >= 1.0 or max_steps (25) is reached.",
+        description="True when all goals are met or max_steps (25) is reached.",
     )
     reward: float = Field(
         default=0.0,
         description=(
-            "Raw layered reward. Range 0.0-1.0 (hard capped). "
+            "Layered reward, hard-capped at 1.0. Range 0.0-1.0. "
             "Layer 0: 0.05 (participation — any tool called). "
             "Layer 1: up to 0.25 (diagnostics — read tools used before acting). "
             "Layer 2: 0.50 (action taken — any order placed or shipment action). "
             "Layer 3: 0.65-0.80 (sub-goals — reroute/cancel/quality/competing). "
             "Layer 4: 1.00 (all goals met). "
-            "Step efficiency bonus (up to +0.15) and budget efficiency bonus "
-            "(up to +0.10) are folded into the 1.0 cap. "
             "Spam penalty: -0.02 per excess call beyond 2 uses of the same tool "
             "(floor 0.0, only applied when score < 1.0)."
         ),
@@ -242,9 +242,8 @@ class SupplyChainRubric:
     Combines an outcome rubric (terminal steps) and a process rubric
     (non-terminal steps) into a single rubric_reward signal.
 
-    FIX v4.1: Default PartialCreditRubric uses reward_max=1.0 (was 1.30).
-    Since environment reward is hard-capped at 1.0, using reward_max=1.30
-    caused perfect episodes to score 0.769 rubric_reward instead of 1.0.
+    Default PartialCreditRubric uses reward_max=1.0, matching the
+    environment's hard reward cap. Perfect episodes score 1.0 rubric_reward.
 
     Usage:
         rubric = SupplyChainRubric()                           # defaults
@@ -282,7 +281,6 @@ class SupplyChainRubric:
         failure_reward: float = -0.10,
         gamma: float = 1.0,
     ):
-        # FIX: reward_max=1.0 (was 1.30) — env reward is capped at 1.0
         self.outcome = outcome or PartialCreditRubric(reward_max=1.0)
         self.process = process or ProcessRubric()
         self.failure_reward = failure_reward
@@ -303,7 +301,7 @@ class SupplyChainRubric:
 
         Args:
             obs_text:             Observation text from the environment.
-            raw_reward:           Raw reward returned by the environment.
+            raw_reward:           Raw reward returned by the environment (0.0-1.0).
             done:                 Whether the episode is finished.
             action_advanced_goal: True if the action directly moved toward the goal.
             expected:             Optional expected outcome for custom rubrics.

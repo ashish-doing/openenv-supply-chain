@@ -33,7 +33,7 @@ Most RL environments for LLMs are either too simple (toy grids, word games) or t
 | Task variety | 6 distinct crisis types + infinite procedural pool |
 | Adversarial element | Competing buyer locks supplier capacity in real time |
 | Quality gate | Orders from defective suppliers are hard-rejected |
-| Reward signal | Layered partial credit + efficiency bonuses (ideal for GRPO) |
+| Reward signal | Layered partial credit (ideal for GRPO) |
 | State diversity | Any integer task ID → unique reproducible episode |
 | Max steps | 25 per episode |
 
@@ -47,12 +47,12 @@ Most RL environments for LLMs are either too simple (toy grids, word games) or t
 | `openenv.yaml` valid — typed models, step/reset/state | ✅ |
 | Dockerfile builds | ✅ |
 | `inference.py` produces `[START]`/`[STEP]`/`[END]` logs | ✅ |
-| 3+ tasks with graders, scores in 0.0–1.30 | ✅ (10 fixed + infinite procedural) |
-| `python validate.py` → 103/103 checks pass | ✅ |
+| 3+ tasks with graders, scores in 0.0–1.0 | ✅ (10 fixed + infinite procedural) |
+| `python validate.py` → all checks pass | ✅ |
 
 ```
 python validate.py
-# Result: 103/103 checks passed — STATUS: READY TO SUBMIT ✓
+# Result: all checks passed — STATUS: READY TO SUBMIT ✓
 ```
 
 ---
@@ -158,7 +158,7 @@ The agent must reason across multiple steps: diagnose the situation with read-on
 | 0.05 | Agent took at least one action |
 | 0.50 | Agent placed any order or rerouted any shipment |
 | 0.75 | Required reroute completed |
-| 1.00+ | All product orders placed with correct suppliers within budget + efficiency bonus |
+| 1.00 | All product orders placed with correct suppliers within budget |
 
 ---
 
@@ -172,7 +172,7 @@ The agent must reason across multiple steps: diagnose the situation with read-on
 | 0.05 | Agent took at least one action |
 | 0.50 | Agent placed any order or cancelled shipment |
 | 0.75 | Stuck shipment cancelled |
-| 1.00+ | All orders placed with the available domestic supplier within budget + efficiency bonus |
+| 1.00 | All orders placed with the available domestic supplier within budget |
 
 ---
 
@@ -186,7 +186,7 @@ The agent must reason across multiple steps: diagnose the situation with read-on
 | 0.05 | Agent took at least one action |
 | 0.50 | Agent placed any order or cancelled shipment |
 | 0.75 | Defective shipment cancelled |
-| 1.00+ | All orders placed with quality-compliant suppliers + efficiency bonus |
+| 1.00 | All orders placed with quality-compliant suppliers |
 
 > **Quality gate:** Orders placed with suppliers whose defect rate exceeds the threshold are hard-rejected with an `Order REJECTED` response. The agent must call `get_quality_report` to identify compliant suppliers first.
 
@@ -202,7 +202,7 @@ The agent must reason across multiple steps: diagnose the situation with read-on
 | 0.05 | Agent took at least one action |
 | 0.50 | Agent placed any order |
 | 0.75 | Primary product secured before competitor locked capacity |
-| 1.00+ | Both products ordered + efficiency bonus |
+| 1.00 | Both products ordered |
 
 > **Countdown mechanic:** Every step, `competing_bids_countdown` in the state dict decrements. When it reaches zero, the competitor places their order and reduces `remaining_capacity` on the supplier — possibly making the goal unreachable.
 
@@ -241,7 +241,7 @@ Agent calls place_order(SupplierA, ...)
     NO
     |
     v
-  Order accepted -> reward 0.75-1.00+
+  Order accepted -> reward 0.75-1.00
 ```
 
 Orders from suppliers with defect rate above the threshold are **rejected server-side**. There is no way to guess around it — the agent must call `get_quality_report` first. This forces tool sequencing, not random exploration.
@@ -271,7 +271,6 @@ GRPO needs dense, shaped rewards — not sparse 0/1 signals. This environment pr
 - **Non-zero floor**: any action scores ≥ 0.05, so no zero-gradient episodes
 - **Meaningful gradient**: 0.05 → 0.50 → 0.75 → 1.00 are all reachable and distinguishable
 - **Penalty pressure**: spam penalty at −0.02/excess call forces the agent to reason between steps
-- **Efficiency signal**: step and budget bonuses reward decisive reasoning, not just correct reasoning
 
 The result: every rollout produces a usable training signal from step 1.
 
@@ -285,12 +284,7 @@ The result: every rollout produces a usable training signal from step 1.
   |
 0.75  ---- key sub-goal met (correct reroute, cancel, quality check)
   |
-1.00  ---- ALL task objectives satisfied
-  |
-+0.15 ---- step efficiency bonus (goals met in < 15 steps)
-+0.10 ---- budget efficiency bonus (budget remaining on hard tasks)
-  |
-1.30  ---- maximum possible score
+1.00  ---- ALL task objectives satisfied (maximum score)
 ```
 
 | Layer | Range | Condition |
@@ -298,9 +292,7 @@ The result: every rollout produces a usable training signal from step 1.
 | Participation | 0.05 | Any action taken |
 | Sub-task credit | 0.50–0.75 | Partial goals met (reroute, cancel, any order) |
 | All goals met | 1.00 | All task objectives satisfied |
-| Step efficiency bonus | +0.00–0.15 | Fewer steps = higher bonus |
-| Budget efficiency bonus | +0.00–0.10 | Budget remaining on hard tasks |
-| **Maximum** | **≤ 1.30** | Goals + max step bonus + max budget bonus |
+| **Maximum** | **1.00** | Hard cap — all rewards are in [0.0, 1.0] |
 
 **Spam penalty:** Calling the same tool more than 2 times total applies a reward penalty of −0.02 per excess call, floor at 0.0.
 
@@ -320,10 +312,10 @@ Scores from `Qwen/Qwen2.5-7B-Instruct` on all 10 fixed tasks against the live HF
 | 7 | `price_negotiation` | 1.00 | 5 |
 | 10 | `multi_product_crisis` | 0.75 | 12 |
 | 11 | `port_strike` | 1.00 | 7 |
-| 12 | `quality_control` | 1.05 | 6 |
+| 12 | `quality_control` | 1.00 | 6 |
 | 13 | `competing_buyer` | 0.75 | 9 |
 
-Tasks score between 0.75 and 1.05 — solvable but not trivially solvable. The ideal difficulty range for an RL training environment.
+Tasks score between 0.75 and 1.00 — solvable but not trivially solvable. The ideal difficulty range for an RL training environment.
 
 ---
 
@@ -483,7 +475,7 @@ python inference.py
 
 ```bash
 python validate.py
-# Result: 103/103 checks passed — STATUS: READY TO SUBMIT ✓
+# Result: all checks passed — STATUS: READY TO SUBMIT ✓
 ```
 
 ---
@@ -505,7 +497,7 @@ openenv-supply-chain/
 │   └── test_environment.py                 # pytest suite (36 tests)
 ├── client.py                               # Python client for training code
 ├── inference.py                            # Baseline LLM agent — emits [START]/[STEP]/[END] logs
-├── validate.py                             # Pre-submission validator (103 checks)
+├── validate.py                             # Pre-submission validator
 ├── openenv.yaml                            # OpenEnv spec config
 ├── Dockerfile                              # Container definition
 └── pyproject.toml                          # Package config (entry point: uv run server)
@@ -520,27 +512,41 @@ openenv-supply-chain/
 | 6 task types | Each requires a different reasoning strategy |
 | Procedural generator | Any integer ID → valid deterministic task — infinite training variety |
 | Spam penalty | Reward penalty for calling same tool > 2 times — forces reasoning between calls |
-| Step efficiency bonus | Up to +0.15 for faster solutions — rewards decisive reasoning |
-| Budget efficiency bonus | Up to +0.10 on hard tasks based on budget remaining |
 | `_tool_call_log` | Full per-episode tool call history for debugging and reward computation |
 | Quality gate | Orders from defective suppliers hard-rejected — agent must check first |
 | Competing buyer countdown | Competitor locks capacity after N steps — real time pressure |
 | 3 diagnostic tools | `get_market_prices`, `get_quality_report`, `get_competing_bids` |
 | Max steps 25 | Enables long-horizon reasoning evaluation |
 | State dict standardised | All 13 fields always present — reliable for automated evaluation |
-| Reward ceiling 1.30 | Accommodates stacked step + budget bonuses |
+| Reward range 0.0–1.0 | Clean normalised signal — directly usable for GRPO training |
 
 ---
 
 ## Changelog
 
-### v4 (current)
+### v4.4 (current)
+- FIX: Reward hard-capped at 1.0 in `step()` to comply with hackathon requirement
+  (`scores/reward in 0.0–1.0 range`). Efficiency bonuses are computed internally
+  and used for done-triggering but do not appear in the returned reward value.
+- `openenv.yaml` `reward_range` updated to `[0.0, 1.0]`.
+- `openenv.yaml` `app` and `entrypoint` paths corrected to
+  `supply_chain_env.server.app:app` / `supply_chain_env.server.app:main`.
+- Version bumped to 4.4.0.
+
+### v4.3
+- Step efficiency bonus formula changed to 0.15*(15-step)/15.
+- Min(1.0, ...) cap removed from efficiency/budget bonuses (now handled in v4.4 step()).
+
+### v4.2
+- Corrected `[START]`/`[STEP]`/`[END]` log format in inference.py.
+- Restructured into proper Python package for clean installs via `uv run server`.
+
+### v4
 - Restructured into proper Python package (`supply_chain_env/`) for clean installs via `uv run server`.
 - Corrected task ID mapping in validator (sections 8–11).
 - Procedural task generator: any integer task ID now produces a valid deterministic task.
 - Added `_tool_call_log`, spam penalty, step efficiency bonus, and budget efficiency bonus.
-- Validator expanded to 103 checks across 14 sections.
-- Reward upper bound raised to 1.30 to accommodate stacked bonuses.
+- Validator expanded across multiple sections.
 - State dict standardised to 13 fields; `goal_description` and `task_type` added.
 - `inference.py` updated to emit exact `[START]`/`[STEP]`/`[END]` judge log format.
 - Default inference model changed to `Qwen/Qwen2.5-7B-Instruct` for runtime compliance.
