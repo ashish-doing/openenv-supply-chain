@@ -58,4 +58,5 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
     CMD curl -f http://localhost:7860/health || exit 1
 
 # HuggingFace Spaces requires port 7860
-CMD ["sh", "-c", "cd /app/env && uvicorn server.app:app --host 0.0.0.0 --port 7860"]
+# FIX: use full package path supply_chain_env.server.app instead of server.app
+CMD ["sh", "-c", "cd /app/env && uvicorn supply_chain_env.server.app:app --host 0.0.0.0 --port 7860"]

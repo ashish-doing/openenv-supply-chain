@@ -12,6 +12,13 @@ FIX v4.2:
     so /state always returned a blank initial state regardless of active session.
     /state now returns a fresh env state with a clear message directing users to
     use the WebSocket or /reset + /step for stateful sessions.
+
+FIX v4.3:
+  - Replaced fragile relative/fallback import chain with clean absolute imports.
+    'from models import ...' and 'from server.supply_chain_env_environment import ...'
+    both fail on HuggingFace because there is no top-level 'server' or 'models' module.
+    Using 'supply_chain_env.*' absolute imports works reliably since the package is
+    installed via pyproject.toml in all environments (local + HF Spaces).
 """
 
 try:
@@ -19,18 +26,11 @@ try:
 except Exception as e:
     raise ImportError("openenv is required. Install: pip install openenv-core") from e
 
-try:
-    from models import SupplyChainAction, SupplyChainObservation
-    from server.supply_chain_env_environment import SupplyChainEnvironment
-except ImportError:
-    try:
-        from ..models import SupplyChainAction, SupplyChainObservation
-        from .supply_chain_env_environment import SupplyChainEnvironment
-    except ImportError:
-        import sys, os
-        sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        from models import SupplyChainAction, SupplyChainObservation
-        from server.supply_chain_env_environment import SupplyChainEnvironment
+# FIX v4.3: Use absolute package imports — works in all environments (local + HuggingFace)
+# The old fallback chain tried 'from server.app import ...' at the top which always
+# resolved first and raised ModuleNotFoundError on HF (no top-level 'server' module).
+from supply_chain_env.models import SupplyChainAction, SupplyChainObservation
+from supply_chain_env.server.supply_chain_env_environment import SupplyChainEnvironment
 
 import json
 from fastapi import Body, WebSocket, WebSocketDisconnect
