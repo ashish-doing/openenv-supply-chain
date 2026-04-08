@@ -1,5 +1,5 @@
 """
-inference.py — Supply Chain Environment Baseline Inference (v4.3)
+inference.py — Supply Chain Environment Baseline Inference (v4.5)
 
 Required env vars:
   API_BASE_URL   The API endpoint for the LLM (e.g. https://router.huggingface.co/v1)
@@ -498,7 +498,7 @@ def run_episode(task_id: int) -> float:
 # ---------------------------------------------------------------------------
 
 def main():
-    print("Supply Chain Environment — Baseline Inference v4.3", flush=True)
+    print("Supply Chain Environment — Baseline Inference v4.5", flush=True)
     print(f"Model      : {MODEL_NAME}", flush=True)
     print(f"Environment: {ENV_BASE_URL}", flush=True)
 

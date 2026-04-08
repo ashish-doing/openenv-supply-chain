@@ -1,22 +1,24 @@
 # Copyright (c) Meta Platforms, Inc. and affiliates.
 """
-Supply Chain Disruption Environment — v4.4 (hackathon reward cap).
+Supply Chain Disruption Environment — v4.5 (strict open-interval reward).
 
-Changes from v4.3:
-  - FIX v4.4: Final reward hard-capped at 1.0 in _compute_reward() to comply
-    with hackathon requirement: "verify scores/reward in 0.0-1.0 range".
-    Efficiency bonuses are still computed internally (they influence done
-    triggering correctly since done fires at reward >= 1.0), but the value
-    returned in SupplyChainObservation is min(score, 1.0).
+Changes from v4.4:
+  - FIX v4.5: Phase 2 validator requires reward strictly in (0, 1) exclusive —
+    neither 0.0 nor 1.0 are valid return values.
 
-    This means:
-      - done still triggers correctly on all-goals-met episodes.
-      - validate.py section 12 checks (r_fast >= 1.10, r_fast > r_slow)
-        will see 1.0 == 1.0 for both fast and slow solves. If validate.py
-        was written against the pre-cap design it may flag section 12 —
-        update validate.py section 12 thresholds to == 1.0 if needed.
-      - reward_range in openenv.yaml updated to [0.0, 1.0].
-      - All other logic unchanged from v4.3.
+    Changes made:
+      a) REWARD_MIN = 0.01, REWARD_MAX = 0.99 constants replace hardcoded 0/1.
+      b) reset() now returns reward=REWARD_MIN instead of 0.0.
+      c) step() clamps final reward to [REWARD_MIN, REWARD_MAX].
+      d) done triggers when internal score >= 1.0 (pre-clamp), so episode
+         termination still fires correctly on task completion.
+      e) Spam penalty floor raised from 0.0 to REWARD_MIN.
+      f) Participation floor unchanged at 0.05 (already > REWARD_MIN).
+
+  Carried from v4.4:
+  - Efficiency bonuses computed internally (above 1.0) for done-triggering;
+    clamped before returning to caller.
+  - reward_range in openenv.yaml: update to [0.01, 0.99].
 """
 
 import random
@@ -41,10 +43,17 @@ except ImportError:
         sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
         from generate_tasks import generate_task
 
+# ---------------------------------------------------------------------------
+# Reward range constants — Phase 2 requires strictly open interval (0, 1).
+# Neither 0.0 nor 1.0 may appear in any returned reward value.
+# ---------------------------------------------------------------------------
+REWARD_MIN = 0.01   # floor: replaces every 0.0 return value
+REWARD_MAX = 0.99   # ceiling: replaces every 1.0 return value
+
 
 class SupplyChainEnvironment(Environment):
     """
-    Stateful supply chain disruption environment.
+    Stateful supply chain disruption environment — v4.5.
 
     Supports all 6 task types:
       easy   → reorder
@@ -54,6 +63,11 @@ class SupplyChainEnvironment(Environment):
 
     Any task_id generates a unique reproducible episode.
     Pass seed to override randomness for exact reproduction.
+
+    Reward contract: all values returned to callers are in (0.0, 1.0)
+    exclusive — strictly greater than 0.0 and strictly less than 1.0.
+    Internal scoring may exceed 1.0 (efficiency bonuses) but is clamped
+    before being returned.
     """
 
     SUPPORTS_CONCURRENT_SESSIONS: bool = True
@@ -99,7 +113,8 @@ class SupplyChainEnvironment(Environment):
             text=task["description"],
             state=self._get_state_dict(),
             done=False,
-            reward=0.0,
+            # FIX v4.5: was 0.0 — invalid per Phase 2 strict open interval rule.
+            reward=REWARD_MIN,
         )
 
     def step(self, action) -> SupplyChainObservation:
@@ -115,7 +130,7 @@ class SupplyChainEnvironment(Environment):
                 text="Episode is already finished.",
                 state=self._get_state_dict(),
                 done=True,
-                reward=0.0,
+                reward=REWARD_MIN,
             )
 
         self._state.step_count += 1
@@ -136,7 +151,6 @@ class SupplyChainEnvironment(Environment):
 
         tool = action.tool
         args = action.args
-
         self._tool_call_log.append(tool)
 
         if tool in handlers:
@@ -147,11 +161,16 @@ class SupplyChainEnvironment(Environment):
                 f"Available: {sorted(handlers.keys())}"
             )
 
-        reward = self._compute_reward()
-        # done triggers on the uncapped internal score so efficiency bonuses
-        # correctly end the episode; reward returned to caller is capped at 1.0.
-        self.done = (reward >= 1.0) or (self._state.step_count >= self.MAX_STEPS)
-        reward = min(reward, 1.0)  # FIX v4.4: hackathon requires reward in [0.0, 1.0]
+        internal_score = self._compute_reward()
+
+        # done triggers on uncapped internal score so efficiency bonuses
+        # correctly end the episode; reward returned to caller is clamped
+        # to strict open interval (REWARD_MIN, REWARD_MAX).
+        self.done = (internal_score >= 1.0) or (self._state.step_count >= self.MAX_STEPS)
+
+        # FIX v4.5: clamp to strictly open interval — neither 0.0 nor 1.0
+        # may appear in returned reward values per Phase 2 requirements.
+        reward = max(REWARD_MIN, min(internal_score, REWARD_MAX))
 
         return SupplyChainObservation(
             text=result_text,
@@ -384,18 +403,9 @@ class SupplyChainEnvironment(Environment):
         """
         Granular reward function — 4 signal layers + 2 bonuses + spam penalty.
 
-        Layer 0  — participation floor       (0.05)
-        Layer 1  — diagnostic signals        (up to +0.25)
-        Layer 2  — correct action taken      (0.50)
-        Layer 3  — sub-goals met             (0.65-0.80)
-        Layer 4  — all goals complete        (1.00 base)
-        Bonus A  — step efficiency           (up to +0.15, only when step < 15)
-        Bonus B  — budget efficiency         (up to +0.10)
-        Penalty  — duplicate tool spam       (-0.02/excess call, floor 0.0)
-
-        NOTE: Bonuses are computed internally and used for done-triggering,
-        but the value returned to the caller is capped at 1.0 (v4.4).
-        The cap is applied in step() after this method returns.
+        Returns internal score (may exceed 1.0). step() clamps to
+        (REWARD_MIN, REWARD_MAX) before returning to callers.
+        done-triggering uses the pre-clamp value so it fires correctly.
         """
         score      = 0.0
         difficulty = self.task["difficulty"]
@@ -477,14 +487,11 @@ class SupplyChainEnvironment(Environment):
         # ── Layer 4: all goals complete ────────────────────────────────────────
         if self._all_goals_met():
             score = 1.0
-
-            # Efficiency bonuses push score above 1.0 internally so that
-            # done-triggering (reward >= 1.0) fires correctly. The caller
-            # (step()) clamps the final returned reward to 1.0.
+            # Efficiency bonuses push above 1.0 internally for done-triggering.
+            # step() clamps to REWARD_MAX before returning.
             if step < 15:
                 eff_bonus = round(0.15 * (15 - step) / 15, 4)
                 score += eff_bonus
-
             if "budget" in self.task:
                 total = self.task["budget"]
                 if total > 0 and self.spent_budget <= total:
@@ -492,10 +499,12 @@ class SupplyChainEnvironment(Environment):
                     score += budget_bonus
 
         # ── Penalty: duplicate tool spam ──────────────────────────────────────
+        # FIX v4.5: floor raised from 0.0 to REWARD_MIN — penalty must never
+        # produce an invalid 0.0 return value.
         if score < 1.0:
             call_counts = Counter(self._tool_call_log)
             excess = sum(max(0, n - 2) for n in call_counts.values())
-            score = max(0.0, score - round(0.02 * excess, 4))
+            score = max(REWARD_MIN, score - round(0.02 * excess, 4))
 
         return round(score, 4)
 

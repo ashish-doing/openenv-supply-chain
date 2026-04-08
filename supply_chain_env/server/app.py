@@ -1,5 +1,5 @@
 """
-FastAPI application for the Supply Chain Environment.
+FastAPI application for the Supply Chain Environment — v4.5.
 Serves the environment over HTTP + WebSocket with pre-filled Swagger examples.
 
 FIX v4.1:
