@@ -31,7 +31,8 @@ Most RL environments for LLMs are either too simple (toy grids, word games) or t
 | Task variety | 6 distinct crisis types + infinite procedural pool |
 | Adversarial element | Competing buyer locks supplier capacity in real time |
 | Quality gate | Orders from defective suppliers are hard-rejected |
-| Reward signal | Layered partial credit (ideal for GRPO) |
+| Reward signal | Layered partial credit with diagnostic bonuses (ideal for GRPO) |
+| Reward range | Strict open interval **(0.01, 0.99)** — never 0.0 or 1.0 |
 | State diversity | Any integer task ID → unique reproducible episode |
 | Max steps | 25 per episode |
 
@@ -45,7 +46,7 @@ Most RL environments for LLMs are either too simple (toy grids, word games) or t
 | `openenv.yaml` valid — typed models, step/reset/state | ✅ |
 | Dockerfile builds | ✅ |
 | `inference.py` produces `[START]`/`[STEP]`/`[END]` logs | ✅ |
-| 3+ tasks with graders, scores in 0.0–1.0 | ✅ (10 fixed + infinite procedural) |
+| 3+ tasks with graders, scores in (0.01, 0.99) | ✅ (10 fixed + infinite procedural) |
 | `python validate.py` → all checks pass | ✅ |
 
 ```
@@ -116,8 +117,9 @@ Check inventory → verify supplier → place reorder.
 | Score | Condition |
 |-------|-----------|
 | 0.05 | Agent took at least one action |
+| Up to 0.25 | Diagnostic tools used (get_inventory, check_supplier_status, etc.) |
 | 0.50 | Agent placed any order |
-| 1.00 | Correct supplier + correct product + correct quantity |
+| 0.99 | Correct supplier + correct product + correct quantity |
 
 ---
 
@@ -131,9 +133,11 @@ Identify failure → reroute shipment → place emergency order.
 | Score | Condition |
 |-------|-----------|
 | 0.05 | Agent took at least one action |
+| Up to 0.25 | Diagnostic tools used |
 | 0.50 | Agent placed any order or rerouted any shipment |
+| 0.65 | Correct order placed (reroute not yet done) |
 | 0.75 | Correct shipment rerouted to healthy supplier |
-| 1.00 | Reroute done AND correct emergency order placed |
+| 0.99 | Reroute done AND correct emergency order placed |
 
 ---
 
@@ -147,8 +151,9 @@ Use `get_market_prices` → find cheapest healthy supplier → order within budg
 | Score | Condition |
 |-------|-----------|
 | 0.05 | Agent took at least one action |
+| Up to 0.25 | Diagnostic tools used |
 | 0.50 | Agent placed any order |
-| 1.00 | Correct supplier (cheapest healthy), correct product, quantity ≥ goal, within budget |
+| 0.99 | Correct supplier (cheapest healthy), correct product, quantity ≥ goal, within budget |
 
 ---
 
@@ -162,9 +167,10 @@ Assess all suppliers → reroute stranded shipment → order ALL products within
 | Score | Condition |
 |-------|-----------|
 | 0.05 | Agent took at least one action |
+| Up to 0.25 | Diagnostic tools used |
 | 0.50 | Agent placed any order or rerouted any shipment |
 | 0.75 | Required reroute completed |
-| 1.00 | All product orders placed with correct suppliers within budget |
+| 0.99 | All product orders placed with correct suppliers within budget |
 
 ---
 
@@ -178,9 +184,10 @@ Assess supplier statuses → cancel the stuck shipment → order all products fr
 | Score | Condition |
 |-------|-----------|
 | 0.05 | Agent took at least one action |
+| Up to 0.25 | Diagnostic tools used |
 | 0.50 | Agent placed any order or cancelled shipment |
 | 0.75 | Stuck shipment cancelled |
-| 1.00 | All orders placed with the available domestic supplier within budget |
+| 0.99 | All orders placed with the available domestic supplier within budget |
 
 ---
 
@@ -194,9 +201,11 @@ Use `get_quality_report` → cancel defective shipment → order ONLY from compl
 | Score | Condition |
 |-------|-----------|
 | 0.05 | Agent took at least one action |
+| Up to 0.25 | Diagnostic tools used |
 | 0.50 | Agent placed any order or cancelled shipment |
 | 0.75 | Defective shipment cancelled |
-| 1.00 | All orders placed with quality-compliant suppliers |
+| 0.80 | Quality report checked BEFORE placing order |
+| 0.99 | All orders placed with quality-compliant suppliers |
 
 > **Quality gate:** Orders placed with suppliers whose defect rate exceeds the threshold are hard-rejected with an `Order REJECTED` response. The agent must call `get_quality_report` to identify compliant suppliers first.
 
@@ -212,9 +221,10 @@ Use `get_competing_bids` → secure product before competitor → also order sec
 | Score | Condition |
 |-------|-----------|
 | 0.05 | Agent took at least one action |
+| Up to 0.25 | Diagnostic tools used |
 | 0.50 | Agent placed any order |
-| 0.75 | Primary product secured before competitor locked capacity |
-| 1.00 | Both products ordered |
+| 0.80 | Primary product secured before competitor locked capacity |
+| 0.99 | Both products ordered |
 
 > **Countdown mechanic:** Every step, `competing_bids_countdown` in the state dict decrements. When it reaches zero, the competitor places their order and reduces `remaining_capacity` on the supplier — possibly making the goal unreachable.
 
@@ -253,7 +263,7 @@ Agent calls place_order(SupplierA, ...)
     NO
     |
     v
-  Order accepted -> reward 0.75-1.00
+  Order accepted -> reward 0.75-0.99
 ```
 
 Orders from suppliers with defect rate above the threshold are **rejected server-side**. There is no way to guess around it — the agent must call `get_quality_report` first. This forces tool sequencing, not random exploration.
@@ -280,8 +290,10 @@ A competitor agent decrements `competing_bids_countdown` every step. When it hit
 ### Why this reward structure works for GRPO
 
 GRPO needs dense, shaped rewards — not sparse 0/1 signals. This environment provides:
-- **Non-zero floor**: any action scores ≥ 0.05, so no zero-gradient episodes
-- **Meaningful gradient**: 0.05 → 0.50 → 0.75 → 1.00 are all reachable and distinguishable
+- **Strict open interval**: all rewards are in **(0.01, 0.99)** — 0.0 and 1.0 are never returned
+- **Non-zero floor**: reset returns 0.01; any action scores ≥ 0.05, so no zero-gradient episodes
+- **Diagnostic layer**: read-only tools earn up to 0.25, rewarding exploration before acting
+- **Meaningful gradient**: 0.05 → 0.25 → 0.50 → 0.65–0.80 → 0.99 are all reachable and distinguishable
 - **Penalty pressure**: spam penalty at −0.02/excess call forces the agent to reason between steps
 
 The result: every rollout produces a usable training signal from step 1.
@@ -289,24 +301,35 @@ The result: every rollout produces a usable training signal from step 1.
 ### Reward layers
 
 ```
-0.00  ---- no action taken
+0.01  ---- reset floor (REWARD_MIN — strictly > 0.0)
 0.05  ---- participation floor (any tool called)
+  |
+0.25  ---- diagnostic ceiling (read-only tools: inventory, supplier checks, etc.)
   |
 0.50  ---- any order placed / shipment rerouted / cancelled
   |
-0.75  ---- key sub-goal met (correct reroute, cancel, quality check)
+0.65  ---- medium task: correct order placed (no reroute yet)
+0.75  ---- key sub-goal met (correct reroute or cancel)
+0.80  ---- quality_control: checked report before ordering
+0.80  ---- competing_buyer: ordered before competitor deadline
   |
-1.00  ---- ALL task objectives satisfied (maximum score)
+0.99  ---- ALL task objectives satisfied (REWARD_MAX — strictly < 1.0)
+            efficiency bonuses computed internally for done-triggering only,
+            clamped to 0.99 before returning to caller
 ```
 
 | Layer | Range | Condition |
 |-------|-------|-----------|
+| Reset floor | 0.01 | Initial value after reset (REWARD_MIN) |
 | Participation | 0.05 | Any action taken |
-| Sub-task credit | 0.50–0.75 | Partial goals met (reroute, cancel, any order) |
-| All goals met | 1.00 | All task objectives satisfied |
-| **Maximum** | **1.00** | Hard cap — all rewards are in [0.0, 1.0] |
+| Diagnostics | 0.05–0.25 | Read-only tools used (get_inventory, check_supplier_status, etc.) |
+| Action taken | 0.50 | Any order / reroute / cancel |
+| Sub-task credit | 0.65–0.80 | Partial goals met |
+| All goals met | 0.99 | All task objectives satisfied (REWARD_MAX) |
 
-**Spam penalty:** Calling the same tool more than 2 times total applies a reward penalty of −0.02 per excess call, floor at 0.0.
+**Spam penalty:** Calling the same tool more than 2 times total applies a reward penalty of −0.02 per excess call, floor at REWARD_MIN (0.01).
+
+**Efficiency bonuses:** Fast solves (< 15 steps) and budget-under-spend earn internal bonuses that push the score above 1.0 — this triggers `done=True` correctly, but the value is **clamped to 0.99** before being returned to the caller.
 
 ---
 
@@ -316,18 +339,18 @@ Scores from `Qwen/Qwen2.5-7B-Instruct` on all 10 fixed tasks against the live HF
 
 | Task ID | Type | Score | Steps used |
 |---------|------|-------|------------|
-| 0 | `reorder` | 1.00 | 3 |
-| 1 | `reorder` | 1.00 | 3 |
-| 2 | `reorder` | 1.00 | 4 |
-| 5 | `reroute` | 1.00 | 5 |
+| 0 | `reorder` | 0.99 | 3 |
+| 1 | `reorder` | 0.99 | 3 |
+| 2 | `reorder` | 0.99 | 4 |
+| 5 | `reroute` | 0.99 | 5 |
 | 6 | `demand_spike` | 0.75 | 8 |
-| 7 | `price_negotiation` | 1.00 | 5 |
+| 7 | `price_negotiation` | 0.99 | 5 |
 | 10 | `multi_product_crisis` | 0.75 | 12 |
-| 11 | `port_strike` | 1.00 | 7 |
-| 12 | `quality_control` | 1.00 | 6 |
+| 11 | `port_strike` | 0.99 | 7 |
+| 12 | `quality_control` | 0.99 | 6 |
 | 13 | `competing_buyer` | 0.75 | 9 |
 
-Tasks score between 0.75 and 1.00 — solvable but not trivially solvable. The ideal difficulty range for an RL training environment.
+Tasks score between 0.75 and 0.99 — solvable but not trivially solvable. The ideal difficulty range for an RL training environment.
 
 ---
 
@@ -340,26 +363,26 @@ In addition to the 10 fixed tasks, the environment generates an infinite pool of
 ```
 0   ------  13   Fixed tasks (backward compatible)
 14  ------  49   Easy   | reorder
-50  ------  99   Medium | reroute / demand_spike
+50  ------  99   Medium | reroute (even IDs) / demand_spike (odd IDs)
 100 ------ 149   Medium | price_negotiation
 150 ------ 199   Hard   | multi_product_crisis
 200 ------ 249   Hard   | quality_control
 250 ------ 299   Hard   | competing_buyer
-300+       inf   Hard   | cycles all hard types -> infinite
+300+       inf   Hard   | cycles all hard types → infinite
 ```
 
 | Task ID range | Difficulty | Type |
 |---------------|------------|------|
 | 0–13 | Fixed | Backward compatible (see table above) |
 | 14–49 | Easy | `reorder` |
-| 50–99 | Medium | `reroute` / `demand_spike` (alternating by parity) |
+| 50–99 | Medium | `reroute` (even) / `demand_spike` (odd) |
 | 100–149 | Medium | `price_negotiation` |
 | 150–199 | Hard | `multi_product_crisis` |
 | 200–249 | Hard | `quality_control` |
 | 250–299 | Hard | `competing_buyer` |
 | 300+ | Hard | Cycles through all hard types |
 
-**Determinism guarantee:** `generate_task(task_id)` always returns the same task for the same ID. The RNG seed is the task_id itself — training runs are fully reproducible.
+**Determinism guarantee:** `generate_task(task_id)` always returns the same task for the same ID. The RNG seed is the task_id itself — training runs are fully reproducible. An optional `seed` parameter overrides randomness for exact reproduction.
 
 ```python
 from supply_chain_env.generate_tasks import generate_task
@@ -396,12 +419,34 @@ for episode in range(1000):
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/reset?task_id=0` | POST | Start a new episode |
-| `/step` | POST | Execute one tool action |
-| `/state` | GET | Full episode state (13 fields, always present) |
+| `/reset` | POST | Start a new episode. Body: `{"task_id": 0, "seed": 42}` |
+| `/step` | POST | Execute one tool action. Body is SupplyChainAction JSON |
+| `/state` | GET | Current episode state (stateless HTTP — see note below) |
 | `/health` | GET | Liveness check — returns `{"status":"healthy"}` |
+| `/ws` | WebSocket | Persistent stateful session for low-latency multi-step play |
+| `/quick/reset` | POST | Reset with JSON body (easy to use, Swagger examples included) |
+| `/quick/step` | POST | Demo-only stateless step (creates fresh episode per call) |
+| `/quick/demo` | GET | Auto-runs a complete demo episode (task_id=0) |
 | `/docs` | GET | Interactive Swagger UI |
-| `/quick/demo` | GET | Auto-runs a complete demo episode |
+
+> **Note on `/state`:** HTTP is stateless — each call returns a fresh env state dict. For true stateful interaction across multiple steps, use the WebSocket `/ws` endpoint or the `/reset` → `/step` pattern.
+
+### WebSocket Usage (`/ws`)
+
+```json
+// Reset
+{"action": "reset", "task_id": 0, "seed": 42}
+
+// Step
+{"action": "step", "tool": "get_inventory", "args": {}}
+{"action": "step", "tool": "place_order",
+ "args": {"supplier_name": "SupplierA", "product": "bottled_water", "quantity": 200}}
+
+// Get state
+{"action": "state"}
+```
+
+The WebSocket connection persists across many reset/step calls — no reconnect needed.
 
 ---
 
@@ -445,6 +490,8 @@ for episode in range(1000):
 ```
 
 The `state` dict always contains all 13 keys. `remaining_budget` is present on tasks with a budget constraint. `competing_bids_countdown` is only populated for `competing_buyer` tasks.
+
+> **Reward range:** All reward values are in the strict open interval **(0.01, 0.99)**. The environment never returns 0.0 or 1.0 to callers.
 
 ---
 
@@ -502,8 +549,8 @@ openenv-supply-chain/
 │   ├── generate_tasks.py                   # Procedural task generator (fixed + infinite pool)
 │   └── server/
 │       ├── __init__.py
-│       ├── app.py                          # FastAPI server — OpenEnv endpoints
-│       └── supply_chain_env_environment.py # Environment logic (all 6 task types)
+│       ├── app.py                          # FastAPI server — OpenEnv endpoints + WebSocket
+│       └── supply_chain_env_environment.py # Environment logic (all 6 task types, v4.7)
 ├── tests/
 │   ├── __init__.py
 │   └── test_environment.py                 # pytest suite (36 tests)
@@ -524,19 +571,39 @@ openenv-supply-chain/
 | 6 task types | Each requires a different reasoning strategy |
 | Procedural generator | Any integer ID → valid deterministic task — infinite training variety |
 | Spam penalty | Reward penalty for calling same tool > 2 times — forces reasoning between calls |
+| Diagnostic reward layer | Read-only tools earn up to 0.25 — rewards structured information gathering |
 | `_tool_call_log` | Full per-episode tool call history for debugging and reward computation |
 | Quality gate | Orders from defective suppliers hard-rejected — agent must check first |
 | Competing buyer countdown | Competitor locks capacity after N steps — real time pressure |
 | 3 diagnostic tools | `get_market_prices`, `get_quality_report`, `get_competing_bids` |
 | Max steps 25 | Enables long-horizon reasoning evaluation |
 | State dict standardised | All 13 fields always present — reliable for automated evaluation |
-| Reward range 0.0–1.0 | Clean normalised signal — directly usable for GRPO training |
+| Reward range (0.01, 0.99) | Strict open interval — 0.0 and 1.0 never returned; directly usable for GRPO |
 
 ---
 
 ## Changelog
 
-### v4.4 (current)
+### v4.7 (current)
+- **FIX v4.7:** Phase 2 validator requires strict open interval — reward values 0.0 and 1.0 are now **never returned**.
+  - `REWARD_MIN = 0.01` (was 0.0) — reset() now returns 0.01 instead of 0.0.
+  - `REWARD_MAX = 0.99` (was 1.0) — all goals met returns 0.99 instead of 1.0.
+  - Spam penalty floor raised to `REWARD_MIN` (0.01).
+  - `done` still triggers on internal score ≥ 1.0 (pre-clamp) — efficiency bonuses fire correctly.
+- `openenv.yaml` `reward_range` updated to `[0.01, 0.99]`.
+- Version bumped to 4.7.0.
+
+### v4.6
+- Added diagnostic reward layer (read-only tools earn up to 0.25 before any action).
+- Sub-goal scores revised: `quality_control` quality-check-before-order → 0.80; `competing_buyer` order-before-deadline → 0.80; medium order-only → 0.65.
+- `openenv.yaml` reward shaping updated to reflect new diagnostic and sub-goal layers.
+
+### v4.5
+- Added WebSocket `/ws` endpoint for persistent stateful sessions.
+- Added `/quick/reset` and `/quick/step` HTTP convenience endpoints with Swagger examples.
+- `inference.py` updated to v4.5: `/reset` now sends `task_id` + `seed` as JSON body (not query params); `EPISODE_SEED` constant defined; 402 credits-depleted detection added; `/step` body sends action nested and flat for compatibility.
+
+### v4.4
 - FIX: Reward hard-capped at 1.0 in `step()` to comply with hackathon requirement
   (`scores/reward in 0.0–1.0 range`). Efficiency bonuses are computed internally
   and used for done-triggering but do not appear in the returned reward value.
@@ -547,19 +614,25 @@ openenv-supply-chain/
 - Version bumped to 4.4.0.
 
 ### v4.3
-- Step efficiency bonus formula changed to 0.15*(15-step)/15.
-- Min(1.0, ...) cap removed from efficiency/budget bonuses (now handled in v4.4 step()).
+- Step efficiency bonus formula changed to `0.15*(15-step)/15`.
+- `min(1.0, ...)` cap removed from efficiency/budget bonuses (now handled in v4.4 `step()`).
+- Fixed absolute package imports in `app.py` — `supply_chain_env.*` imports work reliably in all environments (local + HuggingFace). Old relative/fallback chain failed on HF Spaces.
+- Fixed GET `/state` — no longer returns stale singleton state; returns fresh env state with session guidance.
 
 ### v4.2
-- Corrected `[START]`/`[STEP]`/`[END]` log format in inference.py.
+- Corrected `[START]`/`[STEP]`/`[END]` log format in `inference.py`.
 - Restructured into proper Python package for clean installs via `uv run server`.
+
+### v4.1
+- Added GET `/state` endpoint (was in `openenv.yaml` but missing — returned 404).
+- Fixed `_medium_demand_spike()` — was incorrectly reusing `_medium_reroute()` with type renamed, producing tasks with no `demand_spike` flag and wrong goal structure.
+- Fixed deadlock in `/quick/reset` — no longer calls `localhost:7860`; uses direct instantiation.
 
 ### v4
 - Restructured into proper Python package (`supply_chain_env/`) for clean installs via `uv run server`.
-- Corrected task ID mapping in validator (sections 8–11).
 - Procedural task generator: any integer task ID now produces a valid deterministic task.
 - Added `_tool_call_log`, spam penalty, step efficiency bonus, and budget efficiency bonus.
-- Validator expanded across multiple sections.
+- Validator expanded to 118 checks across multiple sections.
 - State dict standardised to 13 fields; `goal_description` and `task_type` added.
 - `inference.py` updated to emit exact `[START]`/`[STEP]`/`[END]` judge log format.
 - Default inference model changed to `Qwen/Qwen2.5-7B-Instruct` for runtime compliance.
