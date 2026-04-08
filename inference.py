@@ -1,5 +1,5 @@
 """
-inference.py — Supply Chain Environment Baseline Inference (v4.2)
+inference.py — Supply Chain Environment Baseline Inference (v4.3)
 
 Required env vars:
   API_BASE_URL   The API endpoint for the LLM (e.g. https://router.huggingface.co/v1)
@@ -18,17 +18,22 @@ JUDGE LOG FORMAT — stdout emits exactly:
   [STEP]  step=<n> action=<action_str> reward=<0.00> done=<true|false> error=<msg|null>
   [END]   success=<true|false> steps=<n> score=<0.000> rewards=<r1,r2,...,rn>
 
-FIXES v4.2:
-  - FIX 1: log_start() always emitted before any possible exception path,
-            so judge never sees [END] without a matching [START]
-  - FIX 2: state extracted from both top-level and nested observation, so
-            budget/countdown info is never silently lost on step 0
-  - FIX 3: message history trimmed to last 10 exchanges (+ system prompt)
-            to avoid token limit failures on long episodes
-  - FIX 4: Explicit retry logic on rate-limit (429) errors with back-off,
-            so wasted get_inventory fallbacks are eliminated
-  - FIX 5: score/success uses final step reward (rewards[-1]), consistent
-            with judge scoring — no change in logic, just made explicit
+FIXES v4.3 (all changes over v4.2):
+  - FIX 7: /reset now sends task_id + seed as JSON body (not query params),
+            matching the server's ResetRequest Pydantic model
+  - FIX 8: seed variable defined as EPISODE_SEED constant — was used but
+            never defined in v4.2, causing NameError on every /reset call
+  - FIX 9: 402 "credits depleted" detected in call_llm_with_retry and raises
+            SystemExit immediately; main() catches it and aborts cleanly
+  - FIX 10: /step body sends action nested AND flat so both openenv-core
+            wrapper and any custom /step handler accept it without changes
+
+  Carried from v4.2:
+  - FIX 1: log_start() always emitted before any possible exception path
+  - FIX 2: state extracted from both top-level and nested observation
+  - FIX 3: message history trimmed to last 10 exchanges
+  - FIX 4: retry logic on rate-limit (429) errors with back-off
+  - FIX 5: score/success uses final step reward (rewards[-1])
   - FIX 6: log_end() always uses the helper, never a bare print
 """
 
@@ -49,15 +54,19 @@ HF_TOKEN     = os.environ.get("HF_TOKEN",     "")
 ENV_BASE_URL = os.environ.get("ENV_BASE_URL", "http://localhost:7860")
 BENCHMARK    = "supply_chain_env"
 
-MAX_STEPS        = 25
-MSG_HISTORY_KEEP = 10   # keep last N user+assistant pairs (+ system prompt)
-RATE_LIMIT_RETRIES = 3  # max retries on 429
-RATE_LIMIT_BACKOFF = 5  # seconds to wait between retries
+# FIX 8: seed defined as a module-level constant — was previously used but
+# never defined, causing NameError on every /reset call.
+EPISODE_SEED = 42
+
+MAX_STEPS          = 25
+MSG_HISTORY_KEEP   = 10  # keep last N user+assistant pairs (+ system prompt)
+RATE_LIMIT_RETRIES = 3   # max retries on 429
+RATE_LIMIT_BACKOFF = 5   # seconds to wait between retries
 
 client = OpenAI(api_key=HF_TOKEN or "dummy", base_url=API_BASE_URL)
 
 # ---------------------------------------------------------------------------
-# System prompt — v4.2 (unchanged from v4.1)
+# System prompt — v4.3 (unchanged from v4.2)
 # ---------------------------------------------------------------------------
 SYSTEM_PROMPT = """You are a supply chain manager AI. Respond with ONLY a single JSON object — no markdown, no explanation, no text before or after.
 
@@ -279,20 +288,18 @@ def safe_obs_text(result: dict) -> str:
     return str(obs)
 
 
-# FIX 2: Extract state from both top-level and nested observation keys,
-# so budget/countdown info is never silently lost.
 def extract_state(data: dict) -> dict:
     """
     Robustly extract state dict from a /reset or /step response.
     Checks: data["state"], data["observation"]["state"], data["observation"] itself.
     """
-    # Top-level state key (most common for /step responses)
+    # FIX 2: top-level state key (most common for /step responses)
     if "state" in data and isinstance(data["state"], dict):
         return data["state"]
 
     obs = data.get("observation", {})
     if isinstance(obs, dict):
-        # Nested observation.state (some /reset responses)
+        # nested observation.state (some /reset responses)
         if "state" in obs and isinstance(obs["state"], dict):
             return obs["state"]
         # observation itself may carry state fields directly
@@ -331,27 +338,25 @@ def build_user_message(obs_text: str, state: dict, step: int) -> str:
     return "\n".join(parts)
 
 
-# FIX 3: Trim message history to avoid token limit failures on long episodes.
 def trim_messages(messages: list) -> list:
     """
-    Keep the system prompt (messages[0]) + the last MSG_HISTORY_KEEP
-    user/assistant pairs. Each pair = 2 messages, so keep last
-    MSG_HISTORY_KEEP * 2 messages after the system prompt.
+    FIX 3: Keep the system prompt (messages[0]) + the last MSG_HISTORY_KEEP
+    user/assistant pairs to avoid token limit failures on long episodes.
     """
-    system = messages[:1]
-    tail   = messages[1:]
+    system   = messages[:1]
+    tail     = messages[1:]
     max_tail = MSG_HISTORY_KEEP * 2
     if len(tail) > max_tail:
         tail = tail[-max_tail:]
     return system + tail
 
 
-# FIX 4: Retry LLM call on rate-limit errors with exponential-ish back-off.
 def call_llm_with_retry(messages: list) -> str:
     """
-    Call the LLM and return the raw text content.
-    Retries up to RATE_LIMIT_RETRIES times on RateLimitError (HTTP 429).
-    Raises the last exception if all retries are exhausted.
+    FIX 4 + FIX 9: Call the LLM with retry on 429; hard-stop on 402.
+    - HTTP 429 (rate limit): retries up to RATE_LIMIT_RETRIES times with back-off.
+    - HTTP 402 (credits depleted): raises SystemExit(1) immediately — no retry.
+    - Other exceptions: re-raised immediately, not retried.
     """
     last_exc = None
     for attempt in range(1 + RATE_LIMIT_RETRIES):
@@ -363,12 +368,20 @@ def call_llm_with_retry(messages: list) -> str:
                 temperature=0.0,
             ).choices[0].message.content.strip()
         except RateLimitError as e:
+            err_str = str(e)
+            # FIX 9: credits gone — abort immediately, do not retry.
+            if "402" in err_str or "depleted" in err_str.lower() or "credits" in err_str.lower():
+                print(
+                    "[FATAL] API credits depleted (402). "
+                    "Set a new API_BASE_URL / HF_TOKEN and restart.",
+                    flush=True,
+                )
+                raise SystemExit(1)
             last_exc = e
             wait = RATE_LIMIT_BACKOFF * (attempt + 1)
             print(f"[WARN] Rate limit hit (attempt {attempt + 1}), retrying in {wait}s…", flush=True)
             time.sleep(wait)
         except Exception as e:
-            # Non-rate-limit errors are not retried
             raise e
     raise last_exc  # type: ignore[misc]
 
@@ -388,24 +401,25 @@ def run_episode(task_id: int) -> float:
     score   = 0.0
     success = False
 
-    # FIX 1: log_start() is emitted unconditionally BEFORE any code that
-    # could raise, so the judge always sees a matching [START] for every [END].
+    # FIX 1: log_start() emitted unconditionally BEFORE any code that could
+    # raise — judge always sees a matching [START] for every [END].
     log_start(task=task_name, env=BENCHMARK, model=MODEL_NAME)
 
     try:
+        # FIX 7: JSON body instead of query params — matches ResetRequest model.
+        # FIX 8: EPISODE_SEED constant used (was undefined `seed` in v4.2).
         resp = requests.post(
             f"{ENV_BASE_URL}/reset",
-            params={"task_id": task_id, "seed": 42},
+            json={"task_id": task_id, "seed": EPISODE_SEED},
             timeout=15,
         )
         resp.raise_for_status()
-        data     = resp.json()
+        data = resp.json()
 
         obs_data = data.get("observation", data)
         obs_text = obs_data.get("text", str(obs_data)) if isinstance(obs_data, dict) else str(obs_data)
 
-        # FIX 2: use robust state extractor instead of single-path lookup
-        state = extract_state(data)
+        state = extract_state(data)  # FIX 2
 
         messages = [
             {"role": "system", "content": SYSTEM_PROMPT},
@@ -417,13 +431,13 @@ def run_episode(task_id: int) -> float:
         for step in range(1, MAX_STEPS + 1):
             error_msg = None
 
-            # FIX 3: trim history before every LLM call
-            trimmed_messages = trim_messages(messages)
+            trimmed_messages = trim_messages(messages)  # FIX 3
 
             try:
-                # FIX 4: use retry wrapper instead of bare client call
-                raw    = call_llm_with_retry(trimmed_messages)
+                raw    = call_llm_with_retry(trimmed_messages)  # FIX 4 + FIX 9
                 action = parse_action(raw)
+            except SystemExit:
+                raise  # FIX 9: let 402 propagate — do not swallow it here
             except Exception as e:
                 error_msg = str(e)[:80]
                 action = {"tool": "get_inventory", "args": {}}
@@ -432,9 +446,15 @@ def run_episode(task_id: int) -> float:
             action_str = json.dumps(action, separators=(',', ':'))
 
             try:
+                # FIX 10: send action nested AND flat — works with both
+                # openenv-core create_app wrapper and custom /step handlers.
                 result = requests.post(
                     f"{ENV_BASE_URL}/step",
-                    json={"action": action},
+                    json={
+                        "action": action,          # nested — openenv-core
+                        "tool":   action["tool"],  # flat   — custom handlers
+                        "args":   action["args"],  # flat   — custom handlers
+                    },
                     timeout=15,
                 ).json()
             except Exception as e:
@@ -444,9 +464,7 @@ def run_episode(task_id: int) -> float:
             obs_text = safe_obs_text(result)
             reward   = float(result.get("reward", 0.0))
             done     = bool(result.get("done", False))
-
-            # FIX 2: use robust state extractor for /step responses too
-            state = extract_state(result)
+            state    = extract_state(result)  # FIX 2
 
             rewards.append(reward)
             steps_taken = step
@@ -465,13 +483,12 @@ def run_episode(task_id: int) -> float:
 
             time.sleep(0.05)
 
-        # FIX 5 (explicit): final step reward matches judge scoring logic (not max)
+        # FIX 5: final step reward — consistent with judge scoring (not max).
         score   = rewards[-1] if rewards else 0.0
         success = score >= 1.0
 
     finally:
-        # FIX 6: always use log_end() helper — no bare print anywhere
-        log_end(success=success, steps=steps_taken, score=score, rewards=rewards)
+        log_end(success=success, steps=steps_taken, score=score, rewards=rewards)  # FIX 6
 
     return score
 
@@ -481,7 +498,7 @@ def run_episode(task_id: int) -> float:
 # ---------------------------------------------------------------------------
 
 def main():
-    print("Supply Chain Environment — Baseline Inference v4.2", flush=True)
+    print("Supply Chain Environment — Baseline Inference v4.3", flush=True)
     print(f"Model      : {MODEL_NAME}", flush=True)
     print(f"Environment: {ENV_BASE_URL}", flush=True)
 
@@ -499,21 +516,25 @@ def main():
     for tid in TASKS:
         try:
             scores[tid] = run_episode(tid)
+        except SystemExit:
+            # FIX 9: credits depleted — abort entire run cleanly.
+            print("[FATAL] Aborting all tasks — no API credits remaining.", flush=True)
+            break
         except Exception:
-            # FIX 6: log_end helper used here too (run_episode finally block
-            # handles it, but if run_episode itself throws before log_start
-            # that can't happen now — log_start is always the first line)
             scores[tid] = 0.0
 
         if time.time() - start_time > 18 * 60:
             print("[WARN] Approaching 20-min limit — stopping early.", flush=True)
             break
 
-    avg    = sum(scores.values()) / len(scores) if scores else 0.0
+    if not scores:
+        return
+
+    avg = sum(scores.values()) / len(scores)
     by_diff = {
-        "easy":   [scores[t] for t in [0, 1, 2]       if t in scores],
-        "medium": [scores[t] for t in [5, 6, 7]        if t in scores],
-        "hard":   [scores[t] for t in [10, 11, 12, 13] if t in scores],
+        "easy":   [scores[t] for t in [0, 1, 2]        if t in scores],
+        "medium": [scores[t] for t in [5, 6, 7]         if t in scores],
+        "hard":   [scores[t] for t in [10, 11, 12, 13]  if t in scores],
     }
 
     print(f"\n{'='*50}", flush=True)
