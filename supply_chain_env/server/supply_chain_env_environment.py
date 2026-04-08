@@ -1,24 +1,22 @@
 # Copyright (c) Meta Platforms, Inc. and affiliates.
 """
-Supply Chain Disruption Environment — v4.5 (strict open-interval reward).
+Supply Chain Disruption Environment — v4.6 (closed interval [0.0, 1.0]).
 
-Changes from v4.4:
-  - FIX v4.5: Phase 2 validator requires reward strictly in (0, 1) exclusive —
-    neither 0.0 nor 1.0 are valid return values.
+Changes from v4.5:
+  - FIX v4.6: Official spec confirms reward range is [0.0, 1.0] closed interval.
+    Both 0.0 and 1.0 are valid return values. Reverted v4.5 open-interval fix.
 
     Changes made:
-      a) REWARD_MIN = 0.01, REWARD_MAX = 0.99 constants replace hardcoded 0/1.
-      b) reset() now returns reward=REWARD_MIN instead of 0.0.
-      c) step() clamps final reward to [REWARD_MIN, REWARD_MAX].
-      d) done triggers when internal score >= 1.0 (pre-clamp), so episode
-         termination still fires correctly on task completion.
-      e) Spam penalty floor raised from 0.0 to REWARD_MIN.
-      f) Participation floor unchanged at 0.05 (already > REWARD_MIN).
+      a) REWARD_MIN = 0.0, REWARD_MAX = 1.0 (reverted from 0.01 / 0.99).
+      b) reset() returns reward=0.0 (standard initial value).
+      c) step() clamps final reward to [0.0, 1.0] — caps bonuses above 1.0.
+      d) done triggers when internal score >= 1.0 (pre-clamp).
+      e) Spam penalty floor back to 0.0.
 
   Carried from v4.4:
   - Efficiency bonuses computed internally (above 1.0) for done-triggering;
     clamped before returning to caller.
-  - reward_range in openenv.yaml: update to [0.01, 0.99].
+  - reward_range in openenv.yaml: [0.0, 1.0].
 """
 
 import random
@@ -44,16 +42,16 @@ except ImportError:
         from generate_tasks import generate_task
 
 # ---------------------------------------------------------------------------
-# Reward range constants — Phase 2 requires strictly open interval (0, 1).
-# Neither 0.0 nor 1.0 may appear in any returned reward value.
+# Reward range constants — official spec uses closed interval [0.0, 1.0].
+# Both 0.0 and 1.0 are valid return values.
 # ---------------------------------------------------------------------------
-REWARD_MIN = 0.01   # floor: replaces every 0.0 return value
-REWARD_MAX = 0.99   # ceiling: replaces every 1.0 return value
+REWARD_MIN = 0.0    # floor
+REWARD_MAX = 1.0    # ceiling — efficiency bonuses above 1.0 are clamped here
 
 
 class SupplyChainEnvironment(Environment):
     """
-    Stateful supply chain disruption environment — v4.5.
+    Stateful supply chain disruption environment — v4.6.
 
     Supports all 6 task types:
       easy   → reorder
@@ -64,10 +62,9 @@ class SupplyChainEnvironment(Environment):
     Any task_id generates a unique reproducible episode.
     Pass seed to override randomness for exact reproduction.
 
-    Reward contract: all values returned to callers are in (0.0, 1.0)
-    exclusive — strictly greater than 0.0 and strictly less than 1.0.
-    Internal scoring may exceed 1.0 (efficiency bonuses) but is clamped
-    before being returned.
+    Reward contract: all values returned to callers are in [0.0, 1.0]
+    closed interval. Internal scoring may exceed 1.0 (efficiency bonuses)
+    but is clamped to 1.0 before being returned.
     """
 
     SUPPORTS_CONCURRENT_SESSIONS: bool = True
@@ -113,8 +110,7 @@ class SupplyChainEnvironment(Environment):
             text=task["description"],
             state=self._get_state_dict(),
             done=False,
-            # FIX v4.5: was 0.0 — invalid per Phase 2 strict open interval rule.
-            reward=REWARD_MIN,
+            reward=REWARD_MIN,  # 0.0 — valid per closed interval spec
         )
 
     def step(self, action) -> SupplyChainObservation:
@@ -164,12 +160,10 @@ class SupplyChainEnvironment(Environment):
         internal_score = self._compute_reward()
 
         # done triggers on uncapped internal score so efficiency bonuses
-        # correctly end the episode; reward returned to caller is clamped
-        # to strict open interval (REWARD_MIN, REWARD_MAX).
+        # correctly end the episode; reward returned to caller is clamped to 1.0.
         self.done = (internal_score >= 1.0) or (self._state.step_count >= self.MAX_STEPS)
 
-        # FIX v4.5: clamp to strictly open interval — neither 0.0 nor 1.0
-        # may appear in returned reward values per Phase 2 requirements.
+        # Clamp to [0.0, 1.0] — efficiency bonuses may push above 1.0 internally
         reward = max(REWARD_MIN, min(internal_score, REWARD_MAX))
 
         return SupplyChainObservation(
@@ -403,8 +397,8 @@ class SupplyChainEnvironment(Environment):
         """
         Granular reward function — 4 signal layers + 2 bonuses + spam penalty.
 
-        Returns internal score (may exceed 1.0). step() clamps to
-        (REWARD_MIN, REWARD_MAX) before returning to callers.
+        Returns internal score (may exceed 1.0 due to efficiency bonuses).
+        step() clamps to [0.0, 1.0] before returning to callers.
         done-triggering uses the pre-clamp value so it fires correctly.
         """
         score      = 0.0
@@ -488,7 +482,7 @@ class SupplyChainEnvironment(Environment):
         if self._all_goals_met():
             score = 1.0
             # Efficiency bonuses push above 1.0 internally for done-triggering.
-            # step() clamps to REWARD_MAX before returning.
+            # step() clamps to REWARD_MAX (1.0) before returning.
             if step < 15:
                 eff_bonus = round(0.15 * (15 - step) / 15, 4)
                 score += eff_bonus
@@ -499,8 +493,6 @@ class SupplyChainEnvironment(Environment):
                     score += budget_bonus
 
         # ── Penalty: duplicate tool spam ──────────────────────────────────────
-        # FIX v4.5: floor raised from 0.0 to REWARD_MIN — penalty must never
-        # produce an invalid 0.0 return value.
         if score < 1.0:
             call_counts = Counter(self._tool_call_log)
             excess = sum(max(0, n - 2) for n in call_counts.values())
