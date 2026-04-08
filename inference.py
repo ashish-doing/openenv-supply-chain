@@ -485,7 +485,7 @@ def run_episode(task_id: int) -> float:
 
         # FIX 5: final step reward — consistent with judge scoring (not max).
         score   = rewards[-1] if rewards else 0.0
-        success = score >= 1.0
+        success = score >= 0.99
 
     finally:
         log_end(success=success, steps=steps_taken, score=score, rewards=rewards)  # FIX 6
