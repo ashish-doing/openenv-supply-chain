@@ -46,7 +46,7 @@ check("server/requirements.txt exists", os.path.exists(os.path.join("supply_chai
 # ── 2. Imports ────────────────────────────────────────────────────────────────
 print("\n[2] Imports")
 try:
-    from supply_chain_env.server.supply_chain_env_environment import SupplyChainEnvironment
+    from supply_chain_env.server.supply_chain_env_environment import SupplyChainEnvironment, REWARD_MIN, REWARD_MAX
     from supply_chain_env.models import SupplyChainAction
     check("Core imports work", True)
 except Exception as e:
@@ -64,7 +64,8 @@ try:
     check("obs.text is a string",           isinstance(obs.text, str))
     check("obs.state is a dict",            isinstance(obs.state, dict))
     check("obs.done is False after reset",  obs.done == False)
-    check("obs.reward is 0.0 after reset",  obs.reward == 0.0,          str(obs.reward))
+    # FIX v4.7: reset() returns REWARD_MIN (0.01), not 0.0
+    check("obs.reward is REWARD_MIN after reset",  obs.reward == REWARD_MIN, str(obs.reward))
     check("obs.state has 'steps' key",      "steps"      in obs.state)
     check("obs.state has 'inventory' key",  "inventory"  in obs.state)
     check("obs.state has 'task_id' key",    "task_id"    in obs.state)
@@ -81,7 +82,8 @@ try:
     r = env.step(SupplyChainAction(tool="get_inventory", args={}))
     check("step() returns observation",         hasattr(r, "reward"))
     check("step() reward is float",             isinstance(r.reward, float),    str(r.reward))
-    check("step() reward in [0.0, 1.30]",       0.0 <= r.reward <= 1.30,        str(r.reward))
+    # FIX v4.7: upper bound is REWARD_MAX (0.99), not 1.30
+    check("step() reward in [REWARD_MIN, REWARD_MAX]", REWARD_MIN <= r.reward <= REWARD_MAX, str(r.reward))
     check("step() done is bool",                isinstance(r.done, bool))
     check("step() state has 'max_steps'",       "max_steps" in r.state)
     check("MAX_STEPS == 25",                    r.state.get("max_steps") == 25, str(r.state.get("max_steps")))
@@ -126,19 +128,21 @@ try:
         tool="place_order",
         args={"supplier_name":"SupplierA","product":"bottled_water","quantity":200}
     ))
-    check("Layer 4 — goals met → reward >= 1.0",    r4.reward >= 1.0,  str(r4.reward))
-    check("done=True when reward >= 1.0",           r4.done == True)
+    # FIX v4.7: max returned reward is REWARD_MAX (0.99), not 1.0
+    check("Layer 4 — goals met → reward == REWARD_MAX",  r4.reward == REWARD_MAX, str(r4.reward))
+    check("done=True when goals met",                    r4.done == True)
 
-    # Bonus A: 1-step solve should give efficiency bonus >= 1.10
-    check("Bonus A — 1-step solve >= 1.10",         r4.reward >= 1.0, str(r4.reward))
+    # FIX v4.7: efficiency bonuses are internal only; returned reward is clamped to REWARD_MAX (0.99)
+    check("Bonus A — 1-step solve returns REWARD_MAX",  r4.reward == REWARD_MAX, str(r4.reward))
 
     # Spam penalty
     env.reset(task_id=0)
     for _ in range(8):
         env.step(SupplyChainAction(tool="get_inventory", args={}))
     r_spam = env._compute_reward()
-    check("Spam penalty — 8× same tool → reward < 0.20",   r_spam < 0.20, str(r_spam))
-    check("Spam penalty — floor at 0.0",                    r_spam >= 0.0, str(r_spam))
+    check("Spam penalty — 8× same tool → reward < 0.20",   r_spam < 0.20,     str(r_spam))
+    # FIX v4.7: spam floor is REWARD_MIN (0.01), not 0.0
+    check("Spam penalty — floor at REWARD_MIN",             r_spam >= REWARD_MIN, str(r_spam))
 except Exception as e:
     check("Reward layers", False, str(e))
 
@@ -323,7 +327,9 @@ try:
     ))
     check("Step efficiency: fast solve scores higher than slow",
           r_fast.reward >= r_slow.reward, f"fast={r_fast.reward:.4f} slow={r_slow.reward:.4f}")
-    check("Fast solve reward >= 1.10",  r_fast.reward >= 1.0, str(r_fast.reward))
+    # FIX v4.7: efficiency bonuses are internal only; returned reward is clamped to REWARD_MAX (0.99)
+    check("Fast solve reward == REWARD_MAX (efficiency bonus applied internally)",
+          r_fast.reward == REWARD_MAX, str(r_fast.reward))
 
     env.reset(task_id=10)
     env.step(SupplyChainAction(tool="reroute_shipment",
@@ -334,10 +340,11 @@ try:
         args={"supplier_name":"SupplierB","product":"glove","quantity":100}))
     r_budget = env.step(SupplyChainAction(tool="place_order",
         args={"supplier_name":"SupplierD","product":"sanitizer","quantity":80}))
-    check("Budget efficiency: hard task solve reward >= 1.0",
-          r_budget.reward >= 1.0, str(r_budget.reward))
-    check("Budget efficiency: hard task reward in [1.0, 1.30]",
-          1.0 <= r_budget.reward <= 1.30, str(r_budget.reward))
+    # FIX v4.7: returned reward clamped to REWARD_MAX (0.99); internal score may exceed 1.0
+    check("Budget efficiency: hard task solve reward == REWARD_MAX",
+          r_budget.reward == REWARD_MAX, str(r_budget.reward))
+    check("Budget efficiency: hard task reward in [REWARD_MIN, REWARD_MAX]",
+          REWARD_MIN <= r_budget.reward <= REWARD_MAX, str(r_budget.reward))
 except Exception as e:
     check("Efficiency bonuses", False, str(e))
 
