@@ -434,7 +434,7 @@ def run_episode(task_id: int) -> float:
             try:
                 result = requests.post(
                     f"{ENV_BASE_URL}/step",
-                    json=action,
+                    json={"action": action},
                     timeout=15,
                 ).json()
             except Exception as e:
@@ -490,7 +490,7 @@ def main():
         print("Environment: REACHABLE\n", flush=True)
     except Exception:
         print(f"\nERROR: Cannot reach environment at {ENV_BASE_URL}", flush=True)
-        print("Start server: uvicorn server.app:app --host 0.0.0.0 --port 7860", flush=True)
+        print("Start server: uvicorn supply_chain_env.server.app:app --host 0.0.0.0 --port 7860", flush=True)
         return
 
     scores     = {}
