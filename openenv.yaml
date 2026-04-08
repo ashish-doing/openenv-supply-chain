@@ -132,7 +132,7 @@ tasks:
       - {ids: "300+",    difficulty: hard,   type: cycles_all_hard_types}
 
 max_steps: 25
-reward_range: [0.0, 1.0]
+reward_range: [0.01, 0.99]
 
 endpoints:
   - path: /reset
