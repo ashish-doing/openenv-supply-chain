@@ -49,12 +49,9 @@ server = "supply_chain_env.server.app:main"
 [tool.setuptools]
 include-package-data = true
 
-[tool.setuptools.package-dir]
-"server" = "supply_chain_env/server"
-
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["supply_chain_env*", "server*"]
+include = ["supply_chain_env*"]
 
 [tool.setuptools.package-data]
 "*" = ["openenv.yaml", "*.md", "*.json", "*.yaml", "*.yml"]
