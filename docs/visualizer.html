@@ -1,0 +1,1383 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>OpenEnv — Supply Chain Agent</title>
+<link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700;800;900&family=Orbitron:wght@700;900&display=swap" rel="stylesheet">
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#0e0609;font-family:'Nunito',sans-serif;overflow:hidden;height:100vh;display:flex;flex-direction:column}
+
+/* BACKGROUND */
+#bg-canvas{position:fixed;inset:0;z-index:0;pointer-events:none}
+
+/* HEADER */
+#header{
+  position:relative;z-index:10;
+  background:rgba(10,4,8,0.92);
+  border-bottom:1.5px solid rgba(220,50,50,0.4);
+  padding:8px 24px;
+  display:flex;align-items:center;justify-content:space-between;
+  flex-shrink:0;gap:10px;
+}
+.logo{font-family:'Orbitron',monospace;font-weight:900;font-size:15px;color:#e83535;letter-spacing:3px;flex-shrink:0}
+.logo span{color:#fff;font-weight:700}
+.hud-row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.hchip{font-family:'Nunito',sans-serif;font-size:11px;font-weight:700;padding:4px 12px;border-radius:20px;letter-spacing:0.5px;white-space:nowrap}
+.chip-task{background:rgba(220,50,50,0.2);color:#ff7070;border:1px solid rgba(220,50,50,0.4)}
+.chip-step{background:rgba(80,200,120,0.15);color:#60e890;border:1px solid rgba(80,200,120,0.3)}
+.chip-score{background:rgba(255,190,50,0.15);color:#ffc832;border:1px solid rgba(255,190,50,0.3)}
+
+/* ─── BUDGET BAR ─────────────────────────────────────────────────────────── */
+#budget-bar-wrap{
+  display:flex;align-items:center;gap:8px;min-width:160px;
+}
+.budget-label{font-family:'Orbitron',monospace;font-size:9px;font-weight:700;color:rgba(255,255,255,0.4);letter-spacing:1.5px;white-space:nowrap}
+.budget-track{
+  flex:1;height:8px;border-radius:4px;
+  background:rgba(255,255,255,0.08);
+  border:1px solid rgba(255,255,255,0.1);
+  overflow:hidden;position:relative;
+}
+#budget-fill{
+  height:100%;border-radius:4px;
+  background:linear-gradient(90deg,#40d090,#ffc832);
+  transition:width 0.7s cubic-bezier(0.4,0,0.2,1), background 0.5s;
+  width:100%;
+}
+#budget-val{
+  font-family:'Orbitron',monospace;font-size:10px;font-weight:700;
+  color:#60e890;min-width:44px;text-align:right;white-space:nowrap;
+  transition:color 0.5s;
+}
+
+/* MAIN AREA */
+#main{position:relative;z-index:5;flex:1;display:flex;flex-direction:column;overflow:hidden}
+
+/* NETWORK VIEWPORT */
+#net-viewport{
+  flex:1;overflow:hidden;position:relative;
+  cursor:default;
+  transition:all 0.7s cubic-bezier(0.4,0,0.2,1);
+}
+#net-world{
+  position:absolute;top:0;left:0;
+  transition:transform 0.9s cubic-bezier(0.4,0,0.2,1);
+  transform-origin:top left;
+}
+#net-svg{display:block}
+
+/* ─── FILM REEL STRIP (completed steps) ──────────────────────────────────── */
+#reel-strip{
+  position:absolute;
+  top:0;left:0;
+  height:100%;
+  display:flex;flex-direction:column;justify-content:center;
+  padding:12px 4px;
+  gap:6px;
+  z-index:30;
+  pointer-events:none;
+  opacity:0;
+  transform:translateX(-100%);
+  transition:opacity 0.5s, transform 0.5s cubic-bezier(0.34,1.56,0.64,1);
+  overflow:hidden;
+}
+#reel-strip.visible{
+  opacity:1;
+  transform:translateX(0);
+}
+.reel-frame{
+  width:52px;
+  background:rgba(10,4,8,0.92);
+  border:1.5px solid rgba(96,232,144,0.35);
+  border-radius:8px;
+  padding:5px 3px;
+  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;
+  position:relative;
+  flex-shrink:0;
+  animation:reelSlideIn 0.4s cubic-bezier(0.34,1.56,0.64,1) both;
+}
+@keyframes reelSlideIn{
+  from{opacity:0;transform:translateX(-30px) scale(0.7);}
+  to{opacity:1;transform:translateX(0) scale(1);}
+}
+.reel-frame::before,.reel-frame::after{
+  content:'';
+  position:absolute;left:0;right:0;height:5px;
+  background:repeating-linear-gradient(90deg,rgba(96,232,144,0.2) 0,rgba(96,232,144,0.2) 5px,transparent 5px,transparent 10px);
+}
+.reel-frame::before{top:-1px;border-radius:8px 8px 0 0}
+.reel-frame::after{bottom:-1px;border-radius:0 0 8px 8px}
+.reel-num{
+  font-family:'Orbitron',monospace;font-size:7px;font-weight:900;
+  color:#60e890;opacity:0.7;
+}
+.reel-icon{font-size:16px;line-height:1}
+.reel-label{
+  font-family:'Nunito',sans-serif;font-size:6px;font-weight:800;
+  color:rgba(255,255,255,0.55);text-align:center;line-height:1.2;
+  max-width:44px;overflow:hidden;
+}
+.reel-check{
+  width:14px;height:14px;border-radius:50%;
+  background:rgba(96,232,144,0.2);border:1.5px solid #60e890;
+  display:flex;align-items:center;justify-content:center;
+  font-size:8px;color:#60e890;font-weight:900;
+}
+
+/* TASK BUTTONS */
+#task-strip{
+  display:flex;gap:6px;padding:8px 20px;
+  background:rgba(10,4,8,0.9);border-top:1px solid rgba(220,50,50,0.2);
+  align-items:center;flex-shrink:0;flex-wrap:wrap;
+  position:relative;z-index:10;
+}
+.task-pill{
+  font-family:'Nunito',sans-serif;font-weight:700;font-size:10px;
+  padding:5px 14px;border-radius:20px;cursor:pointer;
+  border:1.5px solid rgba(220,50,50,0.3);
+  color:rgba(255,255,255,0.5);background:transparent;
+  transition:all 0.2s;letter-spacing:0.5px;
+}
+.task-pill:hover{border-color:rgba(220,50,50,0.7);color:#fff}
+.task-pill.active{background:rgba(220,50,50,0.25);border-color:#e83535;color:#ff8080}
+.ctrl-row{display:flex;gap:8px;margin-left:auto;align-items:center}
+.btn{
+  font-family:'Nunito',sans-serif;font-weight:800;font-size:11px;
+  padding:6px 18px;border-radius:20px;cursor:pointer;
+  border:1.5px solid;letter-spacing:0.5px;transition:all 0.15s;
+}
+.btn:active{transform:scale(0.95)}
+.btn-play{border-color:#e83535;color:#e83535;background:rgba(220,50,50,0.1)}
+.btn-play:hover{background:rgba(220,50,50,0.25)}
+.btn-play.running{border-color:#ff4444;color:#ff4444;background:rgba(255,50,50,0.2)}
+.btn-reset{border-color:rgba(255,255,255,0.25);color:rgba(255,255,255,0.5);background:transparent}
+.btn-reset:hover{border-color:rgba(255,255,255,0.5);color:#fff}
+.spd-label{font-size:10px;color:rgba(255,255,255,0.4);font-weight:700;letter-spacing:0.5px}
+.spd-sel{
+  background:transparent;border:1px solid rgba(255,190,50,0.3);
+  color:#ffc832;font-family:'Nunito',sans-serif;font-weight:700;font-size:10px;
+  padding:4px 8px;border-radius:8px;cursor:pointer;outline:none;
+}
+.spd-sel option{background:#1a0c10}
+
+/* STORY / COMIC PANEL */
+#story-panel{
+  position:fixed;bottom:0;left:0;right:0;z-index:60;
+  background:rgba(10,4,8,0.97);
+  border-top:2px solid rgba(220,50,50,0.5);
+  display:flex;align-items:center;gap:0;
+  transform:translateY(100%);
+  transition:transform 0.4s cubic-bezier(0.34,1.56,0.64,1);
+  padding:0;
+  height:110px;
+}
+#story-panel.open{transform:translateY(0)}
+#story-bot-zone{
+  width:100px;flex-shrink:0;
+  background:rgba(220,50,50,0.08);
+  border-right:1.5px solid rgba(220,50,50,0.25);
+  height:100%;display:flex;align-items:center;justify-content:center;
+  position:relative;overflow:hidden;
+}
+#story-bot-zone::before{
+  content:'';position:absolute;inset:0;
+  background:radial-gradient(circle at 50% 80%, rgba(220,50,50,0.15) 0%, transparent 70%);
+}
+#story-bot-svg{position:relative;z-index:1;filter:drop-shadow(0 0 8px rgba(220,50,50,0.4))}
+#story-content{flex:1;padding:12px 20px;display:flex;flex-direction:column;justify-content:center;gap:4px}
+.story-name{font-family:'Orbitron',monospace;font-size:8px;font-weight:700;letter-spacing:2px;color:#e83535}
+.story-bubble{
+  position:relative;
+  background:rgba(255,255,255,0.06);
+  border:1.5px solid rgba(220,50,50,0.25);
+  border-radius:4px 12px 12px 12px;
+  padding:7px 14px;font-size:12px;font-weight:600;color:#f0e8e8;line-height:1.5;
+  max-width:600px;
+}
+.story-bubble::before{
+  content:'';position:absolute;top:-1px;left:-9px;
+  border:8px solid transparent;
+  border-right-color:rgba(220,50,50,0.25);
+  border-top:0;border-bottom:8px solid rgba(220,50,50,0.25);
+}
+.story-close{
+  width:36px;height:36px;flex-shrink:0;margin-right:16px;
+  background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.15);
+  border-radius:50%;color:rgba(255,255,255,0.4);cursor:pointer;
+  font-size:16px;display:flex;align-items:center;justify-content:center;
+  transition:all 0.2s;align-self:center;
+}
+.story-close:hover{background:rgba(220,50,50,0.2);border-color:#e83535;color:#fff}
+
+/* POPUP — fixed pos, always above everything */
+.node-popup{
+  position:fixed;
+  background:rgba(10,4,8,0.97);
+  border:2px solid;border-radius:12px;
+  min-width:210px;max-width:250px;
+  box-shadow:0 8px 40px rgba(0,0,0,0.9),0 0 20px rgba(0,0,0,0.5);
+  transform:scale(0) translateY(8px);transform-origin:bottom center;
+  transition:transform 0.28s cubic-bezier(0.34,1.56,0.64,1);
+  z-index:70;overflow:hidden;
+  pointer-events:all;
+}
+.node-popup.open{transform:scale(1) translateY(0)}
+.popup-head{padding:9px 14px;display:flex;align-items:center;gap:8px}
+.popup-head-icon{width:28px;height:28px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:14px;flex-shrink:0}
+.popup-head-title{font-weight:800;font-size:12px;color:#fff;flex:1;letter-spacing:0.3px}
+.popup-close{background:none;border:none;color:rgba(255,255,255,0.4);cursor:pointer;font-size:16px;line-height:1;padding:2px}
+.popup-close:hover{color:#fff}
+.popup-body{padding:10px 14px 14px;font-size:11px}
+.p-row{display:flex;justify-content:space-between;align-items:center;margin:3px 0;gap:8px}
+.p-k{color:rgba(255,255,255,0.45);font-weight:600}
+.p-v{font-weight:800;color:#e8e0e0}
+.p-v.g{color:#60e890}.p-v.r{color:#ff6060}.p-v.y{color:#ffc832}.p-v.b{color:#60b4ff}
+.p-divider{border-top:1px solid rgba(255,255,255,0.08);margin:7px 0}
+.p-bar{height:7px;background:rgba(255,255,255,0.07);border-radius:4px;overflow:hidden;margin:2px 0 5px}
+.p-fill{height:100%;border-radius:4px;transition:width 0.9s cubic-bezier(0.4,0,0.2,1)}
+.big-stamp{
+  text-align:center;font-family:'Orbitron',monospace;font-size:14px;font-weight:700;
+  letter-spacing:3px;padding:7px;margin:6px 0 2px;
+  border:2px solid;border-radius:8px;
+}
+.stamp-ok{color:#60e890;border-color:#60e890;background:rgba(80,200,120,0.1)}
+.stamp-fail{color:#ff6060;border-color:#ff6060;background:rgba(255,80,80,0.1)}
+/* reward popup uses 0..1 scale now */
+.score-big{
+  text-align:center;font-family:'Orbitron',monospace;font-size:30px;font-weight:900;
+  color:#ffc832;padding:6px 0 2px;letter-spacing:2px;
+  text-shadow:0 0 20px rgba(255,200,50,0.5);
+}
+.rank-badge{
+  text-align:center;font-weight:800;font-size:12px;
+  padding:5px;border-radius:8px;letter-spacing:2px;margin-top:4px;
+}
+.supplier-row{
+  display:flex;align-items:center;gap:6px;padding:4px 0;
+  border-bottom:1px solid rgba(255,255,255,0.06);
+}
+.sup-name{flex:1;font-weight:700;font-size:10px;color:#e8e0e0}
+.sup-badge{font-size:9px;font-weight:800;padding:2px 7px;border-radius:10px}
+
+/* ─── COMPLETION POPUP ────────────────────────────────────────────────────── */
+#completion-modal{
+  position:fixed;inset:0;z-index:200;
+  display:flex;align-items:center;justify-content:center;
+  background:rgba(0,0,0,0);
+  pointer-events:none;
+  transition:background 0.5s;
+}
+#completion-modal.show{
+  background:rgba(0,0,0,0.6);
+  pointer-events:all;
+}
+#completion-card{
+  background:linear-gradient(135deg,rgba(14,6,9,0.98),rgba(20,8,14,0.98));
+  border:2px solid rgba(96,232,144,0.5);
+  border-radius:20px;
+  padding:36px 44px;
+  text-align:center;
+  max-width:420px;
+  width:90%;
+  box-shadow:0 0 80px rgba(96,232,144,0.15),0 20px 60px rgba(0,0,0,0.8);
+  transform:scale(0.5) translateY(60px);
+  opacity:0;
+  transition:transform 0.55s cubic-bezier(0.34,1.56,0.64,1), opacity 0.4s;
+  position:relative;overflow:hidden;
+}
+#completion-modal.show #completion-card{
+  transform:scale(1) translateY(0);
+  opacity:1;
+}
+.comp-glare{
+  position:absolute;top:-40%;left:-20%;
+  width:140%;height:70%;
+  background:linear-gradient(180deg,rgba(96,232,144,0.06) 0%,transparent 100%);
+  pointer-events:none;
+}
+.comp-badge{
+  width:70px;height:70px;border-radius:50%;margin:0 auto 16px;
+  background:rgba(96,232,144,0.15);border:2.5px solid #60e890;
+  display:flex;align-items:center;justify-content:center;
+  font-size:30px;
+  box-shadow:0 0 30px rgba(96,232,144,0.3);
+}
+.comp-title{
+  font-family:'Orbitron',monospace;font-size:20px;font-weight:900;
+  color:#60e890;letter-spacing:3px;margin-bottom:6px;
+  text-shadow:0 0 20px rgba(96,232,144,0.5);
+}
+.comp-sub{
+  font-family:'Nunito',sans-serif;font-size:13px;font-weight:600;
+  color:rgba(255,255,255,0.6);margin-bottom:20px;line-height:1.5;
+}
+.comp-stats{
+  display:flex;gap:16px;justify-content:center;margin-bottom:22px;
+}
+.comp-stat{
+  background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.1);
+  border-radius:12px;padding:10px 16px;min-width:90px;
+}
+.comp-stat-val{
+  font-family:'Orbitron',monospace;font-size:18px;font-weight:900;color:#ffc832;
+  line-height:1;margin-bottom:3px;
+}
+.comp-stat-lbl{font-size:9px;font-weight:700;color:rgba(255,255,255,0.4);letter-spacing:1px;text-transform:uppercase}
+.comp-reward-row{
+  display:flex;align-items:center;justify-content:center;gap:10px;margin-bottom:22px;
+}
+.comp-reward-label{font-size:11px;font-weight:700;color:rgba(255,255,255,0.4);letter-spacing:1.5px;text-transform:uppercase}
+.comp-reward-val{
+  font-family:'Orbitron',monospace;font-size:26px;font-weight:900;
+  color:#60e890;letter-spacing:2px;text-shadow:0 0 15px rgba(96,232,144,0.6);
+}
+.comp-close{
+  font-family:'Nunito',sans-serif;font-weight:800;font-size:12px;
+  padding:10px 32px;border-radius:20px;cursor:pointer;
+  border:1.5px solid rgba(96,232,144,0.5);
+  color:#60e890;background:rgba(96,232,144,0.1);
+  transition:all 0.2s;letter-spacing:1px;
+}
+.comp-close:hover{background:rgba(96,232,144,0.2);border-color:#60e890}
+.comp-close:active{transform:scale(0.95)}
+
+/* confetti canvas overlay */
+#confetti-canvas{
+  position:fixed;inset:0;z-index:190;pointer-events:none;
+}
+</style>
+</head>
+<body>
+
+<canvas id="bg-canvas"></canvas>
+<canvas id="confetti-canvas"></canvas>
+
+<div id="header">
+  <div class="logo">OPEN<span>ENV</span> <span style="font-size:10px;font-weight:600;opacity:0.5;letter-spacing:1px">// SUPPLY CHAIN AGENT</span></div>
+  <div class="hud-row">
+    <span class="hchip chip-task" id="chip-task">REORDER MISSION</span>
+    <span class="hchip chip-step" id="chip-step">READY</span>
+    <span class="hchip chip-score" id="chip-score">REWARD: —</span>
+    <div id="budget-bar-wrap">
+      <span class="budget-label">BUDGET</span>
+      <div class="budget-track"><div id="budget-fill"></div></div>
+      <span id="budget-val">$10K</span>
+    </div>
+  </div>
+</div>
+
+<div id="main">
+  <div id="net-viewport">
+    <!-- Film reel sidebar for completed steps -->
+    <div id="reel-strip"></div>
+    <div id="net-world">
+      <svg id="net-svg" xmlns="http://www.w3.org/2000/svg"></svg>
+    </div>
+  </div>
+  <div id="task-strip">
+    <button class="task-pill active" data-idx="0">01 · Reorder</button>
+    <button class="task-pill" data-idx="1">02 · Reroute</button>
+    <button class="task-pill" data-idx="2">03 · Port Strike</button>
+    <button class="task-pill" data-idx="3">04 · Multi Crisis</button>
+    <div class="ctrl-row">
+      <span class="spd-label">SPEED</span>
+      <select class="spd-sel" id="spd-sel">
+        <option value="7000">Slow</option>
+        <option value="4500" selected>Normal</option>
+        <option value="2500">Fast</option>
+      </select>
+      <button class="btn btn-reset" id="btn-reset">↺ Reset</button>
+      <button class="btn btn-play" id="btn-play">▶ Run</button>
+    </div>
+  </div>
+</div>
+
+<div id="story-panel">
+  <div id="story-bot-zone">
+    <svg id="story-bot-svg" width="80" height="90" viewBox="0 0 80 90"></svg>
+  </div>
+  <div id="story-content">
+    <div class="story-name" id="story-name">AGENT</div>
+    <div class="story-bubble" id="story-text">Loading...</div>
+  </div>
+  <button class="story-close" id="story-close">✕</button>
+</div>
+
+<!-- COMPLETION MODAL -->
+<div id="completion-modal">
+  <div id="completion-card">
+    <div class="comp-glare"></div>
+    <div class="comp-badge">🏆</div>
+    <div class="comp-title" id="comp-title">MISSION COMPLETE</div>
+    <div class="comp-sub" id="comp-sub">All supply chain objectives achieved with precision.</div>
+    <div class="comp-stats">
+      <div class="comp-stat">
+        <div class="comp-stat-val" id="comp-steps">6</div>
+        <div class="comp-stat-lbl">Steps</div>
+      </div>
+      <div class="comp-stat">
+        <div class="comp-stat-val" id="comp-budget">$7K</div>
+        <div class="comp-stat-lbl">Budget Left</div>
+      </div>
+      <div class="comp-stat">
+        <div class="comp-stat-val" id="comp-rank">A</div>
+        <div class="comp-stat-lbl">Rank</div>
+      </div>
+    </div>
+    <div class="comp-reward-row">
+      <span class="comp-reward-label">Reward</span>
+      <span class="comp-reward-val" id="comp-reward">+0.87</span>
+    </div>
+    <button class="comp-close" id="comp-close">CONTINUE →</button>
+  </div>
+</div>
+
+<script>
+// ─── TASK DATA ────────────────────────────────────────────────────────────────
+// Reward scores are 0.00–1.00 (capped at 1.0, not out of 100)
+const TASKS = [
+  {
+    name: 'REORDER MISSION', label:'REORDER',
+    nodes: [
+      { id:'wh',  x:80,  y:220, label:'Warehouse',  sub:'Inventory Check',   color:'#e83535', icon:'🏭', story:'Scanning shelves… SKU-A is critically low at 3 units. Emergency reorder triggered!', budgetCost:600 },
+      { id:'sup', x:260, y:120, label:'Suppliers',   sub:'Source & Compare',  color:'#cc6ef0', icon:'🤝', story:'Querying 4 suppliers. Alpha Corp wins — $12.40/unit, only 6% defect rate. Deal locked!', budgetCost:500 },
+      { id:'qc',  x:440, y:220, label:'Quality Gate',sub:'Inspect Batch',     color:'#f0c030', icon:'🔬', story:'Running quality scan. Defect rate: 6% — under the 10% threshold. BATCH APPROVED!', budgetCost:400 },
+      { id:'ord', x:620, y:120, label:'Order Mgr',   sub:'Place & Confirm',   color:'#40d090', icon:'📋', story:'Purchase order placed! 200 units × $12.40 = $2,480. PO-7841 confirmed. ETA: 5 days.', budgetCost:2480 },
+      { id:'shp', x:800, y:220, label:'Shipping',    sub:'Dispatch & Track',  color:'#5090f0', icon:'🚚', story:'SHP-7841 dispatched via FastFreight! Live GPS tracking active. Arrives in 5 days!', budgetCost:350 },
+      { id:'ctrl',x:980, y:120, label:'Control HQ',  sub:'Score & Reward',    color:'#f07030', icon:'🎯', story:'Episode complete! Reward: +0.87. Inventory restored, quality maintained. MISSION DONE!', budgetCost:0 },
+    ],
+    edges:[[0,1],[1,2],[2,3],[3,4],[4,5]],
+    popups: {
+      wh:   { type:'inventory' },
+      sup:  { type:'supplier'  },
+      qc:   { type:'quality'   },
+      ord:  { type:'order'     },
+      shp:  { type:'ship'      },
+      ctrl: { type:'reward', score:0.87 },
+    }
+  },
+  {
+    name: 'REROUTE CRISIS', label:'REROUTE',
+    nodes: [
+      { id:'alert',x:80,  y:220, label:'Crisis Alert!',sub:'Primary Failed',   color:'#e83535', icon:'🚨', story:'ALERT: Primary supplier Alpha Corp has failed. Supply chain compromised. Rerouting now!', budgetCost:200 },
+      { id:'sup',  x:260, y:120, label:'Find Alt.',   sub:'Scan Backup',        color:'#cc6ef0', icon:'🔍', story:'Scanning backup suppliers. Gamma Ltd available! $15/unit via inland route. Switching!', budgetCost:400 },
+      { id:'rrt',  x:440, y:220, label:'Reroute',     sub:'Redirect Shipment',  color:'#f0c030', icon:'🔄', story:'SHP-002 stuck at Port-A. Calculating alternative path… inland highway route found!', budgetCost:800 },
+      { id:'ord',  x:620, y:120, label:'Emerg. Order',sub:'Place Fast',         color:'#40d090', icon:'⚡', story:'Emergency order EO-2291 placed. 150 units via Gamma Ltd. Crisis budget approved!', budgetCost:2250 },
+      { id:'shp',  x:800, y:220, label:'New Route',   sub:'Confirm Reroute',    color:'#5090f0', icon:'🛣️', story:'Road freight dispatched. SHP-2291 rerouted. 7-day ETA. Supply chain restored!', budgetCost:550 },
+      { id:'ctrl', x:980, y:120, label:'Control HQ',  sub:'Score & Reward',     color:'#f07030', icon:'🎯', story:'Reroute successful! Reward: +0.72. Crisis resolved with minimal cost impact. Excellent!', budgetCost:0 },
+    ],
+    edges:[[0,1],[1,2],[2,3],[3,4],[4,5]],
+    popups: {
+      alert:{ type:'alert'   },
+      sup:  { type:'supplier' },
+      rrt:  { type:'reroute'  },
+      ord:  { type:'order'    },
+      shp:  { type:'ship'     },
+      ctrl: { type:'reward', score:0.72 },
+    }
+  },
+  {
+    name: 'PORT STRIKE', label:'STRIKE',
+    nodes: [
+      { id:'alert',x:80,  y:220, label:'Strike!',     sub:'Ports Blocked',      color:'#e83535', icon:'✊', story:'PORT CLOSURE: All overseas routes blocked by worker strike. Duration unknown. Assessing…', budgetCost:300 },
+      { id:'sup',  x:260, y:120, label:'Domestic Src.',sub:'Find Local',         color:'#cc6ef0', icon:'🏠', story:'Pivoting to domestic suppliers. Gamma Corp inland — 340 miles, road-only. Viable!', budgetCost:400 },
+      { id:'rrt',  x:440, y:220, label:'Cancel Sea',  sub:'Halt Port Orders',   color:'#f0c030', icon:'🚫', story:'Cancelling all pending sea freight orders. Recovering funds from blocked shipments.', budgetCost:600 },
+      { id:'ord',  x:620, y:120, label:'Road Order',  sub:'Domestic Purchase',  color:'#40d090', icon:'📦', story:'PO-7722: 300 units × $14.80 via road. Strike surcharge included. Budget cleared!', budgetCost:4440 },
+      { id:'shp',  x:800, y:220, label:'Supply Safe', sub:'Track Road Conv.',   color:'#5090f0', icon:'🚛', story:'Road convoy dispatched! SHP-7722 ETA 3 days. Live GPS tracking active. Strike bypassed!', budgetCost:380 },
+      { id:'ctrl', x:980, y:120, label:'Control HQ',  sub:'Score & Reward',     color:'#f07030', icon:'🎯', story:'Port strike overcome! Reward: +0.79. Zero production line disruption. Adaptive routing: SUCCESS!', budgetCost:0 },
+    ],
+    edges:[[0,1],[1,2],[2,3],[3,4],[4,5]],
+    popups: {
+      alert:{ type:'alert'   },
+      sup:  { type:'supplier' },
+      rrt:  { type:'reroute'  },
+      ord:  { type:'order'    },
+      shp:  { type:'ship'     },
+      ctrl: { type:'reward', score:0.79 },
+    }
+  },
+  {
+    name: 'MULTI CRISIS', label:'MULTI',
+    nodes: [
+      { id:'wh',  x:80,  y:260, label:'Scan All SKUs',sub:'Triple Shortage',    color:'#e83535', icon:'⚠️', story:'TRIPLE ALERT: SKU-A, B, and D all critically low simultaneously! Emergency protocol activated!', budgetCost:200 },
+      { id:'sup', x:280, y:140, label:'Assess All',   sub:'All Suppliers',      color:'#cc6ef0', icon:'🤖', story:'3 suppliers checked. Alpha OK, Beta DEFECTIVE (recall), Delta on STRIKE. Using Alpha+Gamma.', budgetCost:350 },
+      { id:'rrt', x:480, y:280, label:'Reroute SHP',  sub:'Rescue Stuck Ship',  color:'#f0c030', icon:'⚓', story:'SHP-002 stuck at Port-C. Redirecting to inland Alpha depot. Saved $3,200 in inventory!', budgetCost:900 },
+      { id:'ord1',x:680, y:140, label:'Order A+B',    sub:'Dual Product',       color:'#40d090', icon:'📦', story:'Dual order placed! SKU-A + SKU-B from Alpha Corp. Total: $10,040. Budget at 94%.', budgetCost:5020 },
+      { id:'ord2',x:880, y:280, label:'Order D',      sub:'Final Product',      color:'#5090f0', icon:'📦', story:'SKU-D emergency order from Gamma. Budget EXHAUSTED at 99.8%. All 3 products secured!', budgetCost:2800 },
+      { id:'ctrl',x:1080,y:160, label:'Control HQ',   sub:'Score & Reward',     color:'#f07030', icon:'🎯', story:'Multi-crisis resolved! Reward: +0.88. All 3 simultaneous failures handled. Agent resilience: EXCEPTIONAL!', budgetCost:0 },
+    ],
+    edges:[[0,1],[1,2],[2,3],[3,4],[4,5],[1,3]],
+    popups: {
+      wh:  { type:'inventory' },
+      sup: { type:'supplier'  },
+      rrt: { type:'reroute'   },
+      ord1:{ type:'order'     },
+      ord2:{ type:'order'     },
+      ctrl:{ type:'reward', score:0.88 },
+    }
+  },
+];
+
+// ─── ROBOT SVGs ───────────────────────────────────────────────────────────────
+
+function robotSVG(color, eyeColor='#60e890', size=64) {
+  const c = color;
+  const d = dimColor(color, 0.6);
+  const s = size;
+  return `
+  <ellipse cx="${s*.5}" cy="${s*.72}" rx="${s*.18}" ry="${s*.06}" fill="rgba(0,0,0,0.35)"/>
+  <rect x="${s*.3}" y="${s*.7}" width="${s*.14}" height="${s*.2}" rx="${s*.04}" fill="${d}"/>
+  <rect x="${s*.56}" y="${s*.7}" width="${s*.14}" height="${s*.2}" rx="${s*.04}" fill="${d}"/>
+  <rect x="${s*.27}" y="${s*.86}" width="${s*.17}" height="${s*.07}" rx="${s*.03}" fill="${dimColor(color,0.45)}"/>
+  <rect x="${s*.56}" y="${s*.86}" width="${s*.17}" height="${s*.07}" rx="${s*.03}" fill="${dimColor(color,0.45)}"/>
+  <rect x="${s*.18}" y="${s*.38}" width="${s*.64}" height="${s*.36}" rx="${s*.08}" fill="${c}"/>
+  <rect x="${s*.18}" y="${s*.38}" width="${s*.64}" height="${s*.18}" rx="${s*.08}" fill="${lighten(color)}"/>
+  <rect x="${s*.28}" y="${s*.46}" width="${s*.44}" height="${s*.2}" rx="${s*.04}" fill="rgba(0,0,0,0.35)"/>
+  <circle cx="${s*.4}" cy="${s*.56}" r="${s*.05}" fill="${eyeColor}" opacity="0.9"/>
+  <circle cx="${s*.52}" cy="${s*.56}" r="${s*.05}" fill="${eyeColor}" opacity="0.9"/>
+  <rect x="${s*.35}" y="${s*.62}" width="${s*.3}" height="${s*.03}" rx="${s*.015}" fill="${eyeColor}" opacity="0.5"/>
+  <rect x="${s*.05}" y="${s*.4}" width="${s*.13}" height="${s*.26}" rx="${s*.05}" fill="${d}"/>
+  <rect x="${s*.82}" y="${s*.4}" width="${s*.13}" height="${s*.26}" rx="${s*.05}" fill="${d}"/>
+  <circle cx="${s*.115}" cy="${s*.68}" r="${s*.06}" fill="${dimColor(color,0.4)}"/>
+  <circle cx="${s*.885}" cy="${s*.68}" r="${s*.06}" fill="${dimColor(color,0.4)}"/>
+  <rect x="${s*.24}" y="${s*.1}" width="${s*.52}" height="${s*.32}" rx="${s*.1}" fill="${c}"/>
+  <rect x="${s*.24}" y="${s*.1}" width="${s*.52}" height="${s*.14}" rx="${s*.1}" fill="${lighten(color)}"/>
+  <rect x="${s*.47}" y="${s*.03}" width="${s*.06}" height="${s*.1}" rx="${s*.03}" fill="${d}"/>
+  <circle cx="${s*.5}" cy="${s*.03}" r="${s*.05}" fill="${eyeColor}"/>
+  <rect x="${s*.3}" y="${s*.17}" width="${s*.14}" height="${s*.12}" rx="${s*.04}" fill="rgba(0,0,0,0.6)"/>
+  <rect x="${s*.56}" y="${s*.17}" width="${s*.14}" height="${s*.12}" rx="${s*.04}" fill="rgba(0,0,0,0.6)"/>
+  <circle cx="${s*.37}" cy="${s*.23}" r="${s*.05}" fill="${eyeColor}"/>
+  <circle cx="${s*.63}" cy="${s*.23}" r="${s*.05}" fill="${eyeColor}"/>
+  <circle cx="${s*.385}" cy="${s*.215}" r="${s*.02}" fill="#fff"/>
+  <circle cx="${s*.645}" cy="${s*.215}" r="${s*.02}" fill="#fff"/>
+  <rect x="${s*.35}" y="${s*.33}" width="${s*.3}" height="${s*.04}" rx="${s*.02}" fill="rgba(0,0,0,0.5)"/>
+  <rect x="${s*.37}" y="${s*.33}" width="${s*.08}" height="${s*.04}" rx="${s*.02}" fill="${eyeColor}" opacity="0.6"/>
+  <rect x="${s*.47}" y="${s*.33}" width="${s*.08}" height="${s*.04}" rx="${s*.02}" fill="${eyeColor}" opacity="0.6"/>
+  `;
+}
+
+function dimColor(hex, factor) {
+  if (!hex || hex[0] !== '#') return '#888';
+  const r = parseInt(hex.slice(1,3),16), g = parseInt(hex.slice(3,5),16), b = parseInt(hex.slice(5,7),16);
+  return `rgb(${Math.round(r*factor)},${Math.round(g*factor)},${Math.round(b*factor)})`;
+}
+function lighten(hex) {
+  if (!hex || hex[0] !== '#') return 'rgba(200,200,200,0.7)';
+  const r = parseInt(hex.slice(1,3),16), g = parseInt(hex.slice(3,5),16), b = parseInt(hex.slice(5,7),16);
+  return `rgba(${Math.min(255,r+60)},${Math.min(255,g+60)},${Math.min(255,b+60)},0.7)`;
+}
+
+// ─── POPUP HTML BUILDERS ─────────────────────────────────────────────────────
+
+const POPUP_BUILDERS = {
+  inventory: () => `
+    <div class="p-row"><span class="p-k">SKU-A stock</span><span class="p-v r">3 units</span></div>
+    <div class="p-bar"><div class="p-fill" style="width:3%;background:#e83535"></div></div>
+    <div class="p-row"><span class="p-k">SKU-B stock</span><span class="p-v y">18 units</span></div>
+    <div class="p-bar"><div class="p-fill" style="width:18%;background:#f0c030"></div></div>
+    <div class="p-row"><span class="p-k">SKU-C stock</span><span class="p-v g">87 units</span></div>
+    <div class="p-bar"><div class="p-fill" style="width:87%;background:#40d090"></div></div>
+    <div class="p-divider"></div>
+    <div class="p-row"><span class="p-k">Status</span><span class="p-v r">⚠ REORDER NOW</span></div>`,
+
+  supplier: () => `
+    <div class="supplier-row">
+      <span class="sup-name">Alpha Corp</span>
+      <span style="font-size:9px;color:#ffc832;font-weight:700">$12.40</span>
+      <span class="sup-badge" style="background:rgba(80,200,120,0.2);color:#60e890">2% def</span>
+    </div>
+    <div class="supplier-row">
+      <span class="sup-name">Beta Corp</span>
+      <span style="font-size:9px;color:#ffc832;font-weight:700">$13.20</span>
+      <span class="sup-badge" style="background:rgba(255,80,80,0.2);color:#ff6060">18% def</span>
+    </div>
+    <div class="supplier-row">
+      <span class="sup-name">Gamma Ltd</span>
+      <span style="font-size:9px;color:#ffc832;font-weight:700">$15.00</span>
+      <span class="sup-badge" style="background:rgba(80,200,120,0.2);color:#60e890">4% def</span>
+    </div>
+    <div class="p-divider"></div>
+    <div class="p-row"><span class="p-k">Selected</span><span class="p-v g">✓ ALPHA CORP</span></div>`,
+
+  quality: () => `
+    <div class="p-row"><span class="p-k">Checking</span><span class="p-v">Alpha Corp batch</span></div>
+    <div class="p-row"><span class="p-k">Allowed max</span><span class="p-v">10% defect</span></div>
+    <div class="p-bar"><div class="p-fill" id="qbar" style="width:0%;background:#f0c030;transition:width 1s ease"></div></div>
+    <div class="p-row"><span class="p-k">Measured</span><span class="p-v g">6%</span></div>
+    <div id="qstamp"></div>`,
+
+  order: () => `
+    <div class="p-row"><span class="p-k">Supplier</span><span class="p-v">Alpha Corp</span></div>
+    <div class="p-row"><span class="p-k">Quantity</span><span class="p-v">200 units</span></div>
+    <div class="p-row"><span class="p-k">Unit price</span><span class="p-v">$12.40</span></div>
+    <div class="p-divider"></div>
+    <div class="p-row"><span class="p-k">Total</span><span class="p-v y" id="otick">$0</span></div>
+    <div class="p-row"><span class="p-k">Status</span><span class="p-v b" id="ostatus">Processing…</span></div>`,
+
+  ship: () => `
+    <div class="p-row"><span class="p-k">Shipment ID</span><span class="p-v">SHP-7841</span></div>
+    <div class="p-row"><span class="p-k">Carrier</span><span class="p-v">FastFreight™</span></div>
+    <div class="p-bar"><div class="p-fill" id="sbar" style="width:5%;background:#5090f0"></div></div>
+    <div class="p-row"><span class="p-k">Progress</span><span class="p-v b" id="sval">5%</span></div>
+    <div class="p-row"><span class="p-k">ETA</span><span class="p-v y">5 days</span></div>`,
+
+  alert: () => `
+    <div class="big-stamp stamp-fail">⚠ ALERT!</div>
+    <div class="p-divider"></div>
+    <div class="p-row"><span class="p-k">Severity</span><span class="p-v r">CRITICAL</span></div>
+    <div class="p-row"><span class="p-k">Affected</span><span class="p-v r">Primary Route</span></div>
+    <div class="p-row"><span class="p-k">Action</span><span class="p-v y">Rerouting…</span></div>`,
+
+  reroute: () => `
+    <div class="p-row"><span class="p-k">Shipment</span><span class="p-v r">SHP-002 STUCK</span></div>
+    <div class="p-row"><span class="p-k">Blocked at</span><span class="p-v r">Port-A</span></div>
+    <div class="p-divider"></div>
+    <div class="p-bar"><div class="p-fill" id="rbar" style="width:0%;background:#f0c030"></div></div>
+    <div class="p-row"><span class="p-k">New route</span><span class="p-v y" id="rval">Calculating…</span></div>`,
+
+  // reward popup: score displayed as 0.00–1.00
+  reward: (data) => `
+    <div class="score-big" id="rtick">0.00</div>
+    <div class="rank-badge" id="rnk" style="background:rgba(255,200,50,0.1);color:#ffc832">CALCULATING…</div>
+    <div class="p-divider"></div>
+    <div class="p-row"><span class="p-k">Steps used</span><span class="p-v g">6 / 25</span></div>
+    <div class="p-row"><span class="p-k">Efficiency</span><span class="p-v g">OPTIMAL</span></div>`,
+};
+
+function animatePopup(el, type, data) {
+  if (type === 'quality') {
+    setTimeout(() => {
+      const bar = el.querySelector('#qbar');
+      if (bar) bar.style.width = '60%';
+      setTimeout(() => {
+        const st = document.createElement('div');
+        st.className = 'big-stamp stamp-ok'; st.textContent = 'APPROVED ✓';
+        const zone = el.querySelector('#qstamp'); if (zone) zone.appendChild(st);
+      }, 1100);
+    }, 200);
+  }
+  if (type === 'order') {
+    let v = 0;
+    const iv = setInterval(() => {
+      v += 49.6;
+      const t = el.querySelector('#otick');
+      if (t) t.textContent = '$' + Math.round(Math.min(v, 2480));
+      if (v >= 2480) {
+        clearInterval(iv);
+        const s = el.querySelector('#ostatus');
+        if (s) { s.textContent = 'CONFIRMED ✓'; s.className = 'p-v g'; }
+      }
+    }, 28);
+  }
+  if (type === 'ship') {
+    let p = 5;
+    const iv = setInterval(() => {
+      p += 4;
+      const bar = el.querySelector('#sbar'), val = el.querySelector('#sval');
+      if (bar) bar.style.width = Math.min(p, 100) + '%';
+      if (val) val.textContent = Math.round(Math.min(p, 100)) + '%';
+      if (p >= 100) clearInterval(iv);
+    }, 40);
+  }
+  if (type === 'reroute') {
+    let p = 0;
+    const iv = setInterval(() => {
+      p += 6;
+      const bar = el.querySelector('#rbar'), val = el.querySelector('#rval');
+      if (bar) bar.style.width = Math.min(p, 100) + '%';
+      if (p >= 100) {
+        clearInterval(iv);
+        if (val) { val.textContent = 'GAMMA LTD (inland)'; val.style.color = '#60e890'; }
+      }
+    }, 35);
+  }
+  if (type === 'reward') {
+    // Score is 0.00–1.00 now
+    const target = Math.min(1.0, data.score || 0.87);
+    let v = 0;
+    const iv = setInterval(() => {
+      v = Math.min(v + target / 60, target);
+      const t = el.querySelector('#rtick');
+      if (t) t.textContent = v.toFixed(2);
+      if (v >= target - 0.001) {
+        v = target;
+        if (t) t.textContent = v.toFixed(2);
+        clearInterval(iv);
+        const rk = el.querySelector('#rnk');
+        if (rk) {
+          const rank = target >= 0.85 ? 'RANK: S+' : target >= 0.75 ? 'RANK: A' : target >= 0.60 ? 'RANK: B' : 'RANK: C';
+          const col  = target >= 0.85 ? '#60e890' : target >= 0.75 ? '#ffc832' : target >= 0.60 ? '#ff9050' : '#ff6060';
+          rk.textContent = rank; rk.style.color = col;
+          rk.style.border = '1.5px solid ' + col;
+          rk.style.background = col + '20';
+        }
+      }
+    }, 18);
+  }
+}
+
+// ─── ANIMATED BACKGROUND ─────────────────────────────────────────────────────
+
+// Declare confettiPieces here so drawBg() can safely reference it
+let confettiPieces = [];
+let confRunning = false;
+
+const bgCanvas = document.getElementById('bg-canvas');
+const bgCtx = bgCanvas.getContext('2d');
+let bgW, bgH, bgFrame = 0;
+const bgParticles = [];
+
+function resizeBg() {
+  bgW = bgCanvas.width = window.innerWidth;
+  bgH = bgCanvas.height = window.innerHeight;
+}
+resizeBg(); window.addEventListener('resize', resizeBg);
+
+for (let i = 0; i < 40; i++) bgParticles.push({
+  x: Math.random(), y: Math.random(),
+  vx: (Math.random() - 0.5) * 0.0003,
+  vy: (Math.random() - 0.5) * 0.0003,
+  r: 0.5 + Math.random() * 1.5,
+  a: Math.random()
+});
+
+function drawBg() {
+  bgCtx.clearRect(0, 0, bgW, bgH);
+  const grad = bgCtx.createRadialGradient(bgW*.3, bgH*.3, 0, bgW*.5, bgH*.5, bgW*.8);
+  grad.addColorStop(0, '#1a050a');
+  grad.addColorStop(0.5, '#0e0408');
+  grad.addColorStop(1, '#070206');
+  bgCtx.fillStyle = grad; bgCtx.fillRect(0, 0, bgW, bgH);
+  const g2 = bgCtx.createRadialGradient(0, 0, 0, bgW*.2, bgH*.2, bgW*.5);
+  g2.addColorStop(0, 'rgba(200,20,20,0.12)');
+  g2.addColorStop(1, 'transparent');
+  bgCtx.fillStyle = g2; bgCtx.fillRect(0, 0, bgW, bgH);
+  bgCtx.strokeStyle = 'rgba(180,30,30,0.07)'; bgCtx.lineWidth = 1;
+  for (let x = 0; x < bgW; x += 50) { bgCtx.beginPath(); bgCtx.moveTo(x, 0); bgCtx.lineTo(x, bgH); bgCtx.stroke(); }
+  for (let y = 0; y < bgH; y += 50) { bgCtx.beginPath(); bgCtx.moveTo(0, y); bgCtx.lineTo(bgW, y); bgCtx.stroke(); }
+  bgParticles.forEach(p => {
+    p.x += p.vx; p.y += p.vy;
+    if (p.x < 0) p.x = 1; if (p.x > 1) p.x = 0;
+    if (p.y < 0) p.y = 1; if (p.y > 1) p.y = 0;
+    p.a = (Math.sin(bgFrame * 0.02 + p.x * 10) + 1) * 0.5;
+    bgCtx.beginPath();
+    bgCtx.arc(p.x * bgW, p.y * bgH, p.r, 0, Math.PI*2);
+    bgCtx.fillStyle = `rgba(220,60,60,${p.a * 0.4})`;
+    bgCtx.fill();
+  });
+  bgFrame++; requestAnimationFrame(drawBg);
+}
+drawBg();
+
+// ─── DEDICATED CONFETTI CANVAS ────────────────────────────────────────────────
+
+const confCanvas = document.getElementById('confetti-canvas');
+const confCtx = confCanvas.getContext('2d');
+
+function resizeConf() { confCanvas.width = window.innerWidth; confCanvas.height = window.innerHeight; }
+resizeConf(); window.addEventListener('resize', resizeConf);
+
+const CONF_COLORS = ['#e83535','#f0c030','#40d090','#5090f0','#cc6ef0','#f07030','#60e890','#fff'];
+
+function launchConfetti(amount = 120) {
+  for (let i = 0; i < amount; i++) {
+    const angle = -Math.PI/2 + (Math.random() - 0.5) * Math.PI * 1.6; // spread from top
+    const speed = 3 + Math.random() * 7;
+    confettiPieces.push({
+      x: Math.random() * confCanvas.width,
+      y: -10 - Math.random() * 40,
+      vx: Math.cos(angle) * speed * 0.5,
+      vy: 1 + Math.random() * 5,
+      rot: Math.random() * 360,
+      rotV: (Math.random() - 0.5) * 14,
+      col: CONF_COLORS[Math.floor(Math.random() * CONF_COLORS.length)],
+      w: 6 + Math.random() * 10,
+      h: 3 + Math.random() * 5,
+      life: 1.0,
+      shape: Math.random() < 0.3 ? 'circle' : 'rect'
+    });
+  }
+  if (!confRunning) animateConfettiLoop();
+}
+
+function animateConfettiLoop() {
+  confRunning = true;
+  confCtx.clearRect(0, 0, confCanvas.width, confCanvas.height);
+
+  confettiPieces = confettiPieces.filter(p => {
+    p.x += p.vx; p.y += p.vy;
+    p.vy += 0.07; // gravity
+    p.rot += p.rotV;
+    p.life -= 0.006;
+    return p.life > 0 && p.y < confCanvas.height + 40;
+  });
+
+  confettiPieces.forEach(p => {
+    confCtx.save();
+    confCtx.globalAlpha = Math.min(p.life, 1);
+    confCtx.translate(p.x, p.y);
+    confCtx.rotate(p.rot * Math.PI / 180);
+    confCtx.fillStyle = p.col;
+    if (p.shape === 'circle') {
+      confCtx.beginPath();
+      confCtx.arc(0, 0, p.w / 2, 0, Math.PI * 2);
+      confCtx.fill();
+    } else {
+      confCtx.fillRect(-p.w/2, -p.h/2, p.w, p.h);
+    }
+    confCtx.restore();
+  });
+
+  if (confettiPieces.length > 0) {
+    requestAnimationFrame(animateConfettiLoop);
+  } else {
+    confRunning = false;
+    confCtx.clearRect(0, 0, confCanvas.width, confCanvas.height);
+  }
+}
+
+
+// ─── NETWORK SVG ENGINE ───────────────────────────────────────────────────────
+
+const SVG_NS = 'http://www.w3.org/2000/svg';
+const svg = document.getElementById('net-svg');
+const world = document.getElementById('net-world');
+const viewport = document.getElementById('net-viewport');
+
+const WORLD_PAD = 80;
+const NODE_R = 52;
+
+let currentTask = 0, taskData = TASKS[0];
+let simRunning = false, simStep = -1, simTimer = null;
+
+// ─── BUDGET STATE ─────────────────────────────────────────────────────────────
+
+const BUDGET_MAX = 10000;
+let budget = BUDGET_MAX;
+
+function updateBudget(cost) {
+  budget = Math.max(0, budget - cost);
+  const pct = (budget / BUDGET_MAX) * 100;
+  const fill = document.getElementById('budget-fill');
+  const val = document.getElementById('budget-val');
+  const valEl = document.getElementById('budget-val');
+  fill.style.width = pct + '%';
+  // Color: green → yellow → red
+  if (pct > 60) {
+    fill.style.background = 'linear-gradient(90deg,#40d090,#60e890)';
+    valEl.style.color = '#60e890';
+  } else if (pct > 25) {
+    fill.style.background = 'linear-gradient(90deg,#f07030,#ffc832)';
+    valEl.style.color = '#ffc832';
+  } else {
+    fill.style.background = 'linear-gradient(90deg,#e83535,#f07030)';
+    valEl.style.color = '#ff6060';
+  }
+  val.textContent = budget >= 1000 ? '$' + (budget/1000).toFixed(1) + 'K' : '$' + budget;
+}
+
+function resetBudget() {
+  budget = BUDGET_MAX;
+  const fill = document.getElementById('budget-fill');
+  fill.style.width = '100%';
+  fill.style.background = 'linear-gradient(90deg,#40d090,#ffc832)';
+  const val = document.getElementById('budget-val');
+  val.style.color = '#60e890';
+  val.textContent = '$10K';
+}
+
+// ─── FILM REEL STRIP ─────────────────────────────────────────────────────────
+
+const reelStrip = document.getElementById('reel-strip');
+
+function addReelFrame(node, stepNum) {
+  const frame = document.createElement('div');
+  frame.className = 'reel-frame';
+  frame.style.animationDelay = '0ms';
+  frame.innerHTML = `
+    <div class="reel-num">${String(stepNum).padStart(2,'0')}</div>
+    <div class="reel-icon">${node.icon || '🤖'}</div>
+    <div class="reel-label">${node.label}</div>
+    <div class="reel-check">✓</div>`;
+  reelStrip.appendChild(frame);
+
+  if (!reelStrip.classList.contains('visible')) {
+    reelStrip.classList.add('visible');
+  }
+}
+
+function clearReel() {
+  reelStrip.innerHTML = '';
+  reelStrip.classList.remove('visible');
+}
+
+// ─── NETWORK BUILDER ─────────────────────────────────────────────────────────
+
+function getWorldSize(task) {
+  const xs = task.nodes.map(n => n.x), ys = task.nodes.map(n => n.y);
+  return {
+    w: Math.max(...xs) + WORLD_PAD + NODE_R * 2,
+    h: Math.max(...ys) + WORLD_PAD + NODE_R * 2
+  };
+}
+
+function buildNetwork(task) {
+  svg.innerHTML = '';
+  const { w, h } = getWorldSize(task);
+  svg.setAttribute('width', w);
+  svg.setAttribute('height', h);
+  svg.setAttribute('viewBox', `0 0 ${w} ${h}`);
+
+  const defs = makeSVG('defs');
+  const filter = makeSVG('filter');
+  filter.setAttribute('id', 'glow');
+  filter.setAttribute('x', '-50%'); filter.setAttribute('y', '-50%');
+  filter.setAttribute('width', '200%'); filter.setAttribute('height', '200%');
+  const feGaussian = makeSVG('feGaussianBlur');
+  feGaussian.setAttribute('stdDeviation', '4'); feGaussian.setAttribute('result', 'blur');
+  const feMerge = makeSVG('feMerge');
+  const m1 = makeSVG('feMergeNode'); m1.setAttribute('in', 'blur');
+  const m2 = makeSVG('feMergeNode'); m2.setAttribute('in', 'SourceGraphic');
+  feMerge.appendChild(m1); feMerge.appendChild(m2);
+  filter.appendChild(feGaussian); filter.appendChild(feMerge);
+  defs.appendChild(filter);
+  svg.appendChild(defs);
+
+  const edgeGroup = makeSVG('g'); edgeGroup.id = 'edge-group'; svg.appendChild(edgeGroup);
+  const traceGroup = makeSVG('g'); traceGroup.id = 'trace-group'; svg.appendChild(traceGroup);
+  const nodeGroup = makeSVG('g'); nodeGroup.id = 'node-group'; svg.appendChild(nodeGroup);
+
+  task.edges.forEach(([ai, bi]) => {
+    const a = task.nodes[ai], b = task.nodes[bi];
+    const line = makeSVG('line');
+    setAttrs(line, { x1:a.x, y1:a.y, x2:b.x, y2:b.y, stroke:'rgba(255,255,255,0.08)', 'stroke-width':'2', 'stroke-dasharray':'8,6' });
+    edgeGroup.appendChild(line);
+  });
+
+  task.nodes.forEach((node, i) => {
+    const g = makeSVG('g'); g.id = 'node-' + node.id;
+    g.setAttribute('transform', `translate(${node.x},${node.y})`);
+
+    const glowRing = makeSVG('circle');
+    setAttrs(glowRing, { r: NODE_R+8, fill:'transparent', stroke: node.color, 'stroke-width':'1', opacity:'0.2' });
+    glowRing.id = 'glow-' + node.id;
+    g.appendChild(glowRing);
+
+    const circle = makeSVG('circle');
+    setAttrs(circle, { r: NODE_R, fill:'rgba(10,4,8,0.9)', stroke: node.color, 'stroke-width':'2.5' });
+    circle.id = 'circle-' + node.id;
+    g.appendChild(circle);
+
+    const roboG = makeSVG('g');
+    roboG.setAttribute('transform', `translate(${-NODE_R*.62},${-NODE_R*.75})`);
+    const roboSvg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    roboSvg.setAttribute('width', NODE_R*1.24);
+    roboSvg.setAttribute('height', NODE_R*1.24);
+    roboSvg.setAttribute('viewBox', '0 0 64 64');
+    roboSvg.innerHTML = robotSVG(node.color, '#60e890', 64);
+    roboG.appendChild(roboSvg);
+    g.appendChild(roboG);
+
+    const labelBg = makeSVG('rect');
+    setAttrs(labelBg, { x:-46, y: NODE_R+6, width:92, height:30, rx:8, fill:'rgba(10,4,8,0.85)', stroke: node.color, 'stroke-width':'1', opacity:'0.85' });
+    g.appendChild(labelBg);
+
+    const labelText = makeSVG('text');
+    setAttrs(labelText, { x:0, y: NODE_R+18, 'text-anchor':'middle', fill:'#fff', 'font-size':'11', 'font-weight':'700', 'font-family':'Nunito, sans-serif' });
+    labelText.textContent = node.label;
+    g.appendChild(labelText);
+
+    const subText = makeSVG('text');
+    setAttrs(subText, { x:0, y: NODE_R+29, 'text-anchor':'middle', fill: node.color, 'font-size':'8.5', 'font-weight':'600', 'font-family':'Nunito, sans-serif', opacity:'0.85' });
+    subText.textContent = node.sub;
+    g.appendChild(subText);
+
+    const badge = makeSVG('circle');
+    setAttrs(badge, { cx: NODE_R*.65, cy: -NODE_R*.65, r:10, fill: node.color, opacity:'0.9' });
+    g.appendChild(badge);
+    const badgeNum = makeSVG('text');
+    setAttrs(badgeNum, { x: NODE_R*.65, y: -NODE_R*.65+4, 'text-anchor':'middle', fill:'#fff', 'font-size':'9', 'font-weight':'900', 'font-family':'Orbitron, monospace' });
+    badgeNum.textContent = i+1;
+    g.appendChild(badgeNum);
+
+    nodeGroup.appendChild(g);
+  });
+}
+
+function makeSVG(tag) { return document.createElementNS(SVG_NS, tag); }
+function setAttrs(el, attrs) { for (const [k,v] of Object.entries(attrs)) el.setAttribute(k, v); }
+
+function drawTraceLine(edgeIdx, progress) {
+  const traceGroup = document.getElementById('trace-group');
+  const old = document.getElementById('trace-' + edgeIdx);
+  if (old) old.remove();
+
+  const [ai, bi] = taskData.edges[edgeIdx];
+  const a = taskData.nodes[ai], b = taskData.nodes[bi];
+  const ex = a.x + (b.x - a.x) * progress;
+  const ey = a.y + (b.y - a.y) * progress;
+
+  const line = makeSVG('line');
+  line.id = 'trace-' + edgeIdx;
+  setAttrs(line, {
+    x1:a.x, y1:a.y, x2:ex, y2:ey,
+    stroke:'rgba(255,255,255,0.9)', 'stroke-width':'3',
+    'stroke-linecap':'round', filter:'url(#glow)'
+  });
+  traceGroup.appendChild(line);
+
+  const old2 = document.getElementById('trace-dot-' + edgeIdx);
+  if (old2) old2.remove();
+  const dot = makeSVG('circle');
+  dot.id = 'trace-dot-' + edgeIdx;
+  setAttrs(dot, { cx:ex, cy:ey, r:6, fill:'#fff', filter:'url(#glow)', opacity:'0.95' });
+  traceGroup.appendChild(dot);
+}
+
+function markNodeDone(nodeId) {
+  const circle = document.getElementById('circle-' + nodeId);
+  if (circle) { circle.setAttribute('stroke', '#60e890'); circle.setAttribute('stroke-width', '3'); }
+  const glow = document.getElementById('glow-' + nodeId);
+  if (glow) { glow.setAttribute('stroke', '#60e890'); glow.setAttribute('opacity', '0.5'); glow.setAttribute('r', NODE_R+12); }
+}
+
+function pulseNode(nodeId, color) {
+  const circle = document.getElementById('circle-' + nodeId);
+  if (!circle) return;
+  circle.setAttribute('stroke', color);
+  circle.setAttribute('stroke-width', '4');
+  const glow = document.getElementById('glow-' + nodeId);
+  if (glow) { glow.setAttribute('stroke', color); glow.setAttribute('opacity', '0.6'); glow.setAttribute('r', NODE_R+14); }
+}
+
+// ─── CAMERA / PAN ─────────────────────────────────────────────────────────────
+
+function getStoryHeight() {
+  const panel = document.getElementById('story-panel');
+  return panel.classList.contains('open') ? 110 : 0;
+}
+
+function getReelWidth() {
+  return reelStrip.classList.contains('visible') ? 68 : 0;
+}
+
+function panToNode(nodeIdx) {
+  const node = taskData.nodes[nodeIdx];
+  if (!node) return;
+  const vw = viewport.clientWidth;
+  const storyH = 110; // account for story panel height even before it opens
+  const reelW = getReelWidth();
+  const effectiveVW = vw - reelW;
+  const vh = viewport.clientHeight - storyH - 10;
+  const { w: ww, h: wh } = getWorldSize(taskData);
+  const scale = Math.min(effectiveVW / (ww + 40), vh / (wh + 80), 1);
+
+  // Center the target node in the available space (offset for reel)
+  const cx = reelW + effectiveVW / 2;
+  const cy = vh / 2;
+  const tx = cx - node.x * scale;
+  const ty = cy - node.y * scale;
+
+  const minTx = effectiveVW - ww * scale - 40 + reelW;
+  const maxTx = reelW;
+  const minTy = vh - wh * scale - 60;
+  const maxTy = 10;
+  const clampedTx = Math.min(maxTx, Math.max(minTx, tx));
+  const clampedTy = Math.min(maxTy, Math.max(minTy, ty));
+
+  world.style.transform = `translate(${clampedTx}px, ${clampedTy}px) scale(${scale})`;
+  world.style.transformOrigin = 'top left';
+}
+
+function fitAll() {
+  const vw = viewport.clientWidth, vh = viewport.clientHeight;
+  const { w: ww, h: wh } = getWorldSize(taskData);
+  const scale = Math.min(vw / (ww + 60), (vh - 20) / (wh + 100), 1);
+  const tx = (vw - ww * scale) / 2;
+  const ty = (vh - wh * scale) / 2 - 20;
+  world.style.transform = `translate(${tx}px, ${ty}px) scale(${scale})`;
+  world.style.transformOrigin = 'top left';
+}
+
+// ─── POPUP SYSTEM ─────────────────────────────────────────────────────────────
+
+const overlay = document.createElement('div');
+overlay.style.cssText = 'position:fixed;inset:0;pointer-events:none;z-index:70';
+document.body.appendChild(overlay);
+
+function showPopup(nodeIdx) {
+  closeAllPopups();
+  const node = taskData.nodes[nodeIdx];
+  const popData = taskData.popups[node.id];
+  if (!popData) return;
+
+  const builder = POPUP_BUILDERS[popData.type];
+  if (!builder) return;
+
+  const el = document.createElement('div');
+  el.className = 'node-popup';
+  el.style.borderColor = node.color;
+  el.innerHTML = `
+    <div class="popup-head" style="background:${node.color}18;border-bottom:1px solid ${node.color}40">
+      <div class="popup-head-icon" style="background:${node.color}25">
+        <svg width="16" height="16" viewBox="0 0 64 64">${robotSVG(node.color,'#fff',64)}</svg>
+      </div>
+      <span class="popup-head-title">${node.label}</span>
+      <button class="popup-close" onclick="this.closest('.node-popup').classList.remove('open');setTimeout(()=>this.closest('.node-popup').remove(),300)">✕</button>
+    </div>
+    <div class="popup-body">${builder(popData)}</div>`;
+
+  // ── Anchor popup to the RIGHT side — stays clear of left-to-right trace path ──
+  const POPUP_W = 250;
+  const storyH = 120;
+  const margin = 16;
+  const px = window.innerWidth - POPUP_W - margin;
+  const safeH = window.innerHeight - storyH;
+  const py = Math.max(60, safeH * 0.10);
+
+  el.style.left = px + 'px';
+  el.style.top = py + 'px';
+  el.style.pointerEvents = 'all';
+  overlay.appendChild(el);
+  // Delay open so it appears AFTER story panel slides up — eye follows story first
+  setTimeout(() => requestAnimationFrame(() => el.classList.add('open')), 320);
+  animatePopup(el, popData.type, popData);
+}
+
+function closeAllPopups() {
+  overlay.querySelectorAll('.node-popup').forEach(p => {
+    p.classList.remove('open');
+    setTimeout(() => p.remove(), 300);
+  });
+}
+
+// ─── STORY PANEL ─────────────────────────────────────────────────────────────
+
+const storyPanel = document.getElementById('story-panel');
+const storyBotSvg = document.getElementById('story-bot-svg');
+const storyName = document.getElementById('story-name');
+const storyText = document.getElementById('story-text');
+document.getElementById('story-close').onclick = () => storyPanel.classList.remove('open');
+
+function showStory(nodeIdx) {
+  const node = taskData.nodes[nodeIdx];
+  storyName.textContent = node.label.toUpperCase() + ' BOT';
+  storyName.style.color = node.color;
+  storyText.textContent = node.story;
+  storyBotSvg.innerHTML = robotSVG(node.color, '#fff', 80);
+  storyPanel.classList.add('open');
+}
+
+// ─── HUD ─────────────────────────────────────────────────────────────────────
+
+function updateHUD() {
+  document.getElementById('chip-task').textContent = taskData.name;
+  const step = simStep >= 0 ? `STEP ${simStep+1} / ${taskData.nodes.length}` : 'READY';
+  document.getElementById('chip-step').textContent = step;
+}
+
+// ─── COMPLETION MODAL ────────────────────────────────────────────────────────
+
+const completionModal = document.getElementById('completion-modal');
+
+function showCompletion(taskDat) {
+  const lastNode = taskDat.nodes[taskDat.nodes.length - 1];
+  const popData = taskDat.popups[lastNode.id];
+  const reward = popData ? (popData.score || 0.87) : 0.87;
+  const rank = reward >= 0.85 ? 'S+' : reward >= 0.75 ? 'A' : reward >= 0.60 ? 'B' : 'C';
+  const budgetLeft = budget >= 1000 ? '$' + (budget/1000).toFixed(1) + 'K' : '$' + budget;
+
+  document.getElementById('comp-title').textContent = taskDat.name + ' ✓';
+  document.getElementById('comp-sub').textContent = lastNode.story;
+  document.getElementById('comp-steps').textContent = taskDat.nodes.length;
+  document.getElementById('comp-budget').textContent = budgetLeft;
+  document.getElementById('comp-rank').textContent = rank;
+
+  // Animate reward counter
+  const rewardEl = document.getElementById('comp-reward');
+  rewardEl.textContent = '+0.00';
+  let v = 0;
+  const iv = setInterval(() => {
+    v = Math.min(v + reward / 55, reward);
+    rewardEl.textContent = '+' + v.toFixed(2);
+    if (v >= reward - 0.001) {
+      rewardEl.textContent = '+' + reward.toFixed(2);
+      clearInterval(iv);
+    }
+  }, 20);
+
+  completionModal.classList.add('show');
+
+  // Launch sparks from top
+  setTimeout(() => {
+    launchConfetti(180);
+    // Second burst
+    setTimeout(() => launchConfetti(80), 600);
+  }, 400);
+}
+
+function hideCompletion() {
+  completionModal.classList.remove('show');
+  confettiPieces = [];
+  confCtx.clearRect(0, 0, confCanvas.width, confCanvas.height);
+}
+
+document.getElementById('comp-close').onclick = hideCompletion;
+completionModal.addEventListener('click', e => {
+  if (e.target === completionModal) hideCompletion();
+});
+
+// ─── SIMULATION ───────────────────────────────────────────────────────────────
+
+function getDelay() { return parseInt(document.getElementById('spd-sel').value); }
+
+function runStep() {
+  if (!simRunning) return;
+  simStep++;
+  if (simStep >= taskData.nodes.length) { endSim(); return; }
+
+  const node = taskData.nodes[simStep];
+  updateHUD();
+
+  // Mark previous done + add to reel
+  if (simStep > 0) {
+    const prevNode = taskData.nodes[simStep - 1];
+    markNodeDone(prevNode.id);
+    addReelFrame(prevNode, simStep); // reel shows completed steps
+  }
+
+  pulseNode(node.id, node.color);
+  panToNode(simStep);
+
+  // Update budget
+  updateBudget(node.budgetCost || 0);
+
+  const edgeIdx = taskData.edges.findIndex(([a,b]) => b === simStep);
+  if (edgeIdx >= 0) {
+    animateTrace(edgeIdx, () => {
+      showPopup(simStep);
+      showStory(simStep);
+      simTimer = setTimeout(() => runStep(), getDelay());
+    });
+  } else {
+    showPopup(simStep);
+    showStory(simStep);
+    simTimer = setTimeout(() => runStep(), getDelay());
+  }
+}
+
+function animateTrace(edgeIdx, onDone) {
+  let p = 0;
+  // Travel takes 35% of the step delay, clamped between 600ms and 2000ms
+  // This leaves the remaining 65% for reading the story + popup
+  const dur = Math.min(Math.max(getDelay() * 0.35, 600), 2000);
+  const steps = 60;
+  const step = 1 / steps;
+  const iv = setInterval(() => {
+    p += step;
+    drawTraceLine(edgeIdx, Math.min(p, 1));
+    if (p >= 1) { clearInterval(iv); if (onDone) onDone(); }
+  }, dur / steps);
+}
+
+function endSim() {
+  simRunning = false;
+  const lastNode = taskData.nodes[taskData.nodes.length - 1];
+
+  // Mark last node done and add to reel
+  markNodeDone(lastNode.id);
+  addReelFrame(lastNode, taskData.nodes.length);
+
+  document.getElementById('btn-play').textContent = '↺ Replay';
+  document.getElementById('btn-play').classList.remove('running');
+
+  // Get final reward
+  const popData = taskData.popups[lastNode.id];
+  const reward = popData ? (popData.score || 0.87) : 0.87;
+  document.getElementById('chip-score').textContent = 'REWARD: +' + reward.toFixed(2);
+
+  // Close story/popup, restore full view
+  storyPanel.classList.remove('open');
+  closeAllPopups();
+
+  setTimeout(() => {
+    // Reel disappears and world returns to full fit
+    clearReel();
+    fitAll();
+
+    // Show completion modal after world restores
+    setTimeout(() => showCompletion(taskData), 600);
+  }, 1000);
+}
+
+function startSim() {
+  simRunning = true; simStep = -1;
+  clearTimeout(simTimer);
+  document.getElementById('btn-play').textContent = '⏸ Pause';
+  document.getElementById('btn-play').classList.add('running');
+  storyPanel.classList.remove('open');
+  closeAllPopups();
+  clearReel();
+  resetBudget();
+  updateHUD();
+  const traceGroup = document.getElementById('trace-group');
+  if (traceGroup) traceGroup.innerHTML = '';
+  runStep();
+}
+
+function resetSim() {
+  simRunning = false; simStep = -1;
+  clearTimeout(simTimer);
+  document.getElementById('btn-play').textContent = '▶ Run';
+  document.getElementById('btn-play').classList.remove('running');
+  storyPanel.classList.remove('open');
+  closeAllPopups();
+  clearReel();
+  resetBudget();
+  hideCompletion();
+  document.getElementById('chip-score').textContent = 'REWARD: —';
+  buildNetwork(taskData);
+  fitAll();
+  updateHUD();
+}
+
+// ─── CONTROLS ────────────────────────────────────────────────────────────────
+
+document.getElementById('btn-play').onclick = () => {
+  if (simRunning) {
+    simRunning = false; clearTimeout(simTimer);
+    document.getElementById('btn-play').textContent = '▶ Run';
+    document.getElementById('btn-play').classList.remove('running');
+  } else {
+    if (simStep >= taskData.nodes.length - 1) resetSim();
+    startSim();
+  }
+};
+document.getElementById('btn-reset').onclick = resetSim;
+
+document.querySelectorAll('.task-pill').forEach(btn => {
+  btn.onclick = () => {
+    document.querySelectorAll('.task-pill').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    currentTask = parseInt(btn.dataset.idx);
+    taskData = TASKS[currentTask];
+    resetSim();
+  };
+});
+
+// ─── INIT ────────────────────────────────────────────────────────────────────
+
+buildNetwork(taskData);
+updateHUD();
+
+window.addEventListener('resize', () => {
+  resizeBg(); resizeConf();
+  if (!simRunning) fitAll();
+});
+
+setTimeout(fitAll, 100);
+</script>
+</body>
+</html>

@@ -250,7 +250,7 @@ async def quick_step(body: StepRequest = Body(...)):
         },
         "reward": result.reward,
         "done":   result.done,
-        "hint": "reward=1.0 means task complete! Use /reset + /step for stateful play.",
+        "hint": "reward=0.99 means task complete! Use /reset + /step for stateful play.",
     }
 
 
@@ -292,10 +292,10 @@ async def quick_demo():
 
     return {
         "task":         "Easy Task 0: Reorder bottled water",
-        "result":       "SUCCESS" if steps[-1]["reward"] >= 1.0 else "INCOMPLETE",
+        "result":       "SUCCESS" if steps[-1]["reward"] >= 0.99 else "INCOMPLETE",
         "final_reward": steps[-1]["reward"],
         "episode":      steps,
-        "message":      "Reward 1.0 = task solved. Use /reset + /step for agent play.",
+        "message":      "Reward 0.99 = task solved. Use /reset + /step for agent play.",
     }
 
 
