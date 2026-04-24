@@ -19,6 +19,8 @@ tags:
 
 **Live Space:** [HuggingFace](https://huggingface.co/spaces/ashish-doing/supply-chain-env-hf) | **API Docs:** [Interactive Swagger UI](https://ashish-doing-supply-chain-env-hf.hf.space/docs) | **Live Demo:** [Watch agent solve a task](https://ashish-doing-supply-chain-env-hf.hf.space/quick/demo)
 
+## 🎮 Live Visualizer
+[**→ Watch the agent run**](https://ashish-doing.github.io/openenv-supply-chain/visualizer.html)
 ---
 
 ## Why this environment
