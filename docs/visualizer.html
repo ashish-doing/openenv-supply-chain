@@ -162,52 +162,92 @@ body{background:#0e0609;font-family:'Nunito',sans-serif;overflow:hidden;height:1
 }
 .spd-sel option{background:#1a0c10}
 
-/* STORY / COMIC PANEL */
+/* STORY / COMIC PANEL — redesigned */
 #story-panel{
   position:fixed;bottom:0;left:0;right:0;z-index:60;
-  background:rgba(10,4,8,0.97);
-  border-top:2px solid rgba(220,50,50,0.5);
-  display:flex;align-items:center;gap:0;
+  background:rgba(8,3,6,0.98);
+  border-top:2px solid rgba(220,50,50,0.6);
+  display:flex;align-items:stretch;gap:0;
   transform:translateY(100%);
-  transition:transform 0.4s cubic-bezier(0.34,1.56,0.64,1);
+  transition:transform 0.45s cubic-bezier(0.34,1.56,0.64,1);
   padding:0;
-  height:110px;
+  height:130px;
 }
 #story-panel.open{transform:translateY(0)}
+
+/* Left bot zone — taller, more presence */
 #story-bot-zone{
-  width:100px;flex-shrink:0;
-  background:rgba(220,50,50,0.08);
-  border-right:1.5px solid rgba(220,50,50,0.25);
-  height:100%;display:flex;align-items:center;justify-content:center;
+  width:110px;flex-shrink:0;
+  background:linear-gradient(180deg,rgba(220,50,50,0.12) 0%,rgba(220,50,50,0.04) 100%);
+  border-right:2px solid rgba(220,50,50,0.3);
+  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;
   position:relative;overflow:hidden;
 }
 #story-bot-zone::before{
   content:'';position:absolute;inset:0;
-  background:radial-gradient(circle at 50% 80%, rgba(220,50,50,0.15) 0%, transparent 70%);
+  background:radial-gradient(circle at 50% 90%, rgba(220,50,50,0.2) 0%, transparent 65%);
 }
-#story-bot-svg{position:relative;z-index:1;filter:drop-shadow(0 0 8px rgba(220,50,50,0.4))}
-#story-content{flex:1;padding:12px 20px;display:flex;flex-direction:column;justify-content:center;gap:4px}
-.story-name{font-family:'Orbitron',monospace;font-size:8px;font-weight:700;letter-spacing:2px;color:#e83535}
-.story-bubble{
-  position:relative;
-  background:rgba(255,255,255,0.06);
-  border:1.5px solid rgba(220,50,50,0.25);
-  border-radius:4px 12px 12px 12px;
-  padding:7px 14px;font-size:12px;font-weight:600;color:#f0e8e8;line-height:1.5;
-  max-width:600px;
+#story-bot-svg{position:relative;z-index:1;filter:drop-shadow(0 0 10px rgba(220,50,50,0.5))}
+
+/* Right content — full open, no box */
+#story-content{
+  flex:1;
+  padding:14px 28px 14px 24px;
+  display:flex;flex-direction:column;justify-content:center;
+  gap:6px;
+  overflow:hidden;
 }
-.story-bubble::before{
-  content:'';position:absolute;top:-1px;left:-9px;
-  border:8px solid transparent;
-  border-right-color:rgba(220,50,50,0.25);
-  border-top:0;border-bottom:8px solid rgba(220,50,50,0.25);
+
+/* Node name — bold, big, prominent */
+.story-name{
+  font-family:'Orbitron',monospace;
+  font-size:13px;
+  font-weight:900;
+  letter-spacing:3px;
+  color:#e83535;
+  text-transform:uppercase;
+  line-height:1;
+  opacity:0;
+  transform:translateX(-10px);
+  transition:opacity 0.3s ease, transform 0.3s ease;
 }
+.story-name.visible{
+  opacity:1;
+  transform:translateX(0);
+}
+
+/* Story text — no box, just clean type */
+#story-text{
+  font-family:'Nunito',sans-serif;
+  font-size:15px;
+  font-weight:700;
+  color:#f0e8e8;
+  line-height:1.55;
+  letter-spacing:0.2px;
+  min-height:24px;
+}
+
+/* Typewriter cursor */
+#story-cursor{
+  display:inline-block;
+  width:2px;height:1.1em;
+  background:#e83535;
+  vertical-align:middle;
+  margin-left:2px;
+  border-radius:1px;
+  animation:cursorBlink 0.75s step-end infinite;
+}
+@keyframes cursorBlink{
+  0%,100%{opacity:1} 50%{opacity:0}
+}
+
+/* Close button */
 .story-close{
-  width:36px;height:36px;flex-shrink:0;margin-right:16px;
-  background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.15);
-  border-radius:50%;color:rgba(255,255,255,0.4);cursor:pointer;
-  font-size:16px;display:flex;align-items:center;justify-content:center;
-  transition:all 0.2s;align-self:center;
+  width:32px;height:32px;flex-shrink:0;margin-right:18px;align-self:center;
+  background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.12);
+  border-radius:50%;color:rgba(255,255,255,0.3);cursor:pointer;
+  font-size:14px;display:flex;align-items:center;justify-content:center;
+  transition:all 0.2s;
 }
 .story-close:hover{background:rgba(220,50,50,0.2);border-color:#e83535;color:#fff}
 
@@ -396,11 +436,11 @@ body{background:#0e0609;font-family:'Nunito',sans-serif;overflow:hidden;height:1
 
 <div id="story-panel">
   <div id="story-bot-zone">
-    <svg id="story-bot-svg" width="80" height="90" viewBox="0 0 80 90"></svg>
+    <svg id="story-bot-svg" width="82" height="92" viewBox="0 0 80 90"></svg>
   </div>
   <div id="story-content">
     <div class="story-name" id="story-name">AGENT</div>
-    <div class="story-bubble" id="story-text">Loading...</div>
+    <div id="story-text"><span id="story-cursor"></span></div>
   </div>
   <button class="story-close" id="story-close">✕</button>
 </div>
@@ -1159,15 +1199,53 @@ const storyPanel = document.getElementById('story-panel');
 const storyBotSvg = document.getElementById('story-bot-svg');
 const storyName = document.getElementById('story-name');
 const storyText = document.getElementById('story-text');
+const storyCursor = document.getElementById('story-cursor');
 document.getElementById('story-close').onclick = () => storyPanel.classList.remove('open');
+
+let typewriterTimer = null;
+
+function typewrite(text, el, cursor, speedMs = 28) {
+  // Cancel any in-progress typewriter
+  if (typewriterTimer) clearInterval(typewriterTimer);
+
+  // Clear current text but keep cursor
+  el.textContent = '';
+  el.appendChild(cursor);
+
+  let i = 0;
+  typewriterTimer = setInterval(() => {
+    if (i < text.length) {
+      // Insert character before cursor
+      el.insertBefore(document.createTextNode(text[i]), cursor);
+      i++;
+    } else {
+      clearInterval(typewriterTimer);
+      typewriterTimer = null;
+      // Fade cursor out after done typing
+      setTimeout(() => { cursor.style.opacity = '0'; }, 1800);
+    }
+  }, speedMs);
+}
 
 function showStory(nodeIdx) {
   const node = taskData.nodes[nodeIdx];
-  storyName.textContent = node.label.toUpperCase() + ' BOT';
+
+  // Update bot SVG and color
+  storyBotSvg.innerHTML = robotSVG(node.color, '#fff', 82);
+
+  // Animate name in
+  storyName.classList.remove('visible');
   storyName.style.color = node.color;
-  storyText.textContent = node.story;
-  storyBotSvg.innerHTML = robotSVG(node.color, '#fff', 80);
+  storyName.textContent = node.label.toUpperCase() + ' BOT';
+  void storyName.offsetWidth; // force reflow for transition
+  requestAnimationFrame(() => storyName.classList.add('visible'));
+
+  // Reset cursor visibility
+  storyCursor.style.opacity = '1';
+
+  // Open panel first, then start typing after slide-in completes
   storyPanel.classList.add('open');
+  setTimeout(() => typewrite(node.story, storyText, storyCursor, 26), 420);
 }
 
 // ─── HUD ─────────────────────────────────────────────────────────────────────
@@ -1330,6 +1408,10 @@ function startSim() {
 function resetSim() {
   simRunning = false; simStep = -1;
   clearTimeout(simTimer);
+  if (typewriterTimer) { clearInterval(typewriterTimer); typewriterTimer = null; }
+  storyText.textContent = '';
+  storyText.appendChild(storyCursor);
+  storyCursor.style.opacity = '1';
   document.getElementById('btn-play').textContent = '▶ Run';
   document.getElementById('btn-play').classList.remove('running');
   storyPanel.classList.remove('open');
